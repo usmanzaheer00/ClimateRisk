@@ -55,7 +55,7 @@ def level_from_score(score: float) -> str:
     if score < 0.80: return "Very High"
     return "Extreme"
 
-@app.get("/current-risk")
+@app.get("/api/current-risk")
 def current_risk(province: str = Query(...)):
     match = df_current[df_current["Province"] == province]
     if match.empty:
@@ -92,11 +92,11 @@ def current_risk(province: str = Query(...)):
         },
     }
 
-@app.get("/provinces")
+@app.get("/api/provinces")
 def provinces():
     return {"provinces": df_current["Province"].dropna().tolist()}
 
-@app.get("/future-risk/years")
+@app.get("/api/future-risk/years")
 def future_risk_years(hazard: str = Query(..., description="'TXX' or 'RX1Day'")):
     entry = HAZARD_REGISTRY.get(hazard)
     if entry is None:
@@ -129,7 +129,7 @@ class FutureRiskRequest(BaseModel):
     exposure:      List[IndicatorItem]
     vulnerability: List[IndicatorItem]
 
-@app.post("/future-risk")
+@app.post("/api/future-risk")
 def future_risk(req: FutureRiskRequest):
     ow = req.outerWeights
     outer_total = ow.hazard + ow.exposure + ow.vulnerability
@@ -183,12 +183,6 @@ def future_risk(req: FutureRiskRequest):
         },
     }
 
-# Change from @app.get("/current-risk") to:
-@app.get("/api/current-risk")
-def get_current_risk(province: str):
-    # Your existing code that parses your climate datasets...
-    return {"status": "success", "data": ...}
-
 PROJECTS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adaptation_projects.csv")
 
 PROJECTS_CSV_HEADERS = [
@@ -228,16 +222,16 @@ class SaveProjectRequest(BaseModel):
     vulnerabilityIndicators: List[SaveProjectIndicator]
     breakdown:               Dict[str, Any]
 
-@app.post("/save-project")
+@app.post("/api/save-project")
 def save_project(req: SaveProjectRequest):
     """Append a saved adaptation project to the CSV log."""
     file_exists = os.path.isfile(PROJECTS_CSV)
 
     bd = req.breakdown
     row = {
-        "saved_at":                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_at":                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "project_name":                    req.name,
-        "province":                        req.province,
+        "province":                    req.province,
         "start_year":                      req.startYear,
         "end_year":                        req.endYear,
         "tenure":                          req.tenure,
@@ -265,7 +259,6 @@ def save_project(req: SaveProjectRequest):
 
     return {"status": "saved", "file": PROJECTS_CSV, "project": req.name}
 
-
 class AdaptHazardItem(BaseModel):
     name:   str
     weight: float
@@ -285,7 +278,7 @@ class AdaptationRiskRequest(BaseModel):
     exposure:      List[AdaptIndicatorItem]
     vulnerability: List[AdaptIndicatorItem]
 
-@app.post("/adaptation-risk")
+@app.post("/api/adaptation-risk")
 def adaptation_risk(req: AdaptationRiskRequest):
     ow = req.outerWeights
     outer_total = ow.hazard + ow.exposure + ow.vulnerability
