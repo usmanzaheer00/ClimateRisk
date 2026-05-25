@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "framework": "vite",
+  "cleanUrls": true,
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -8,7 +8,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "frontend/$1"
+      "destination": "/$1"
     }
   ]
 }
