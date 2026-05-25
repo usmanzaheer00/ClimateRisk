@@ -183,6 +183,12 @@ def future_risk(req: FutureRiskRequest):
         },
     }
 
+# Change from @app.get("/current-risk") to:
+@app.get("/api/current-risk")
+def get_current_risk(province: str):
+    # Your existing code that parses your climate datasets...
+    return {"status": "success", "data": ...}
+
 PROJECTS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adaptation_projects.csv")
 
 PROJECTS_CSV_HEADERS = [
