@@ -20,11 +20,11 @@ app.add_middleware(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CURRENT_RISK_FILE = os.path.join(BASE_DIR, "Risk Index 2026.xlsx")
+CURRENT_RISK_FILE = os.path.join(BASE_DIR, "Risk Index 2026.csv")
 TXX_FILE    = os.path.join(BASE_DIR, "TXX.csv")
 RX1DAY_FILE = os.path.join(BASE_DIR, "RX1DAY.csv")  
 
-df_current = pd.read_excel(CURRENT_RISK_FILE)
+df_current = pd.read_csv(CURRENT_RISK_FILE)
 
 def _load_csv(path: str, label: str) -> pd.DataFrame | None:
     if not os.path.exists(path):
