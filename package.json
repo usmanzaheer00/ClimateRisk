@@ -1,10 +1,7 @@
 {
   "name": "climate-risk-calculator-root",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "private": true,
-  "workspaces": [
-    "frontend"
-  ],
   "scripts": {
     "build": "cd frontend && npm install && npm run build"
   }
