@@ -1,7 +1,7 @@
 // Frontend Dashboard for Climate Risk Calculator
 import { useState, useEffect } from "react";
 
-const API = window.location.origin;
+const API = "/api";
 
 // ── Professional colour palette ──────────────────────────────────────────────
 // Slate-based neutrals + three muted semantic colours (no bright orange/green/purple)
