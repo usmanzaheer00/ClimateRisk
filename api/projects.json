@@ -1,0 +1,534 @@
+[
+  {
+    "savedAt": "2026-06-23T08:17:17.653582",
+    "name": "P1",
+    "province": "Torba",
+    "startYear": 2040,
+    "endYear": 2060,
+    "tenure": 20,
+    "riskScore": 0.430251,
+    "level": "High",
+    "breakdown": {
+      "hazard": {
+        "outerWeight": 0.33,
+        "score": 0.274324,
+        "contribution": 0.090527,
+        "items": [
+          {
+            "name": "Hazard 1",
+            "value": 0.499336,
+            "weight": 0
+          },
+          {
+            "name": "Hazard 2",
+            "value": 0.274324,
+            "weight": 1
+          }
+        ]
+      },
+      "exposure": {
+        "outerWeight": 0.33,
+        "score": 0.612906,
+        "contribution": 0.202259,
+        "items": [
+          {
+            "name": "Total_Population",
+            "value": 0,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "Age",
+            "value": 1,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_3",
+            "value": 0.627783,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_4",
+            "value": 0.056114,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_5",
+            "value": 1,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_6",
+            "value": 0.989391,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_7",
+            "value": 0.488181,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_8",
+            "value": 0.820203,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_9",
+            "value": 0.661728,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_10",
+            "value": 0.485656,
+            "weight": 0.1,
+            "multiplier": 1
+          }
+        ]
+      },
+      "vulnerability": {
+        "outerWeight": 0.34,
+        "score": 0.404311,
+        "contribution": 0.137466,
+        "items": [
+          {
+            "name": "Labour Force Participation Rate",
+            "value": 0.479412,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "Unemployement_Rate",
+            "value": 0.247934,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "Piped_Shared_Water",
+            "value": 0.392157,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "Piped_Private_Water",
+            "value": 0,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_5",
+            "value": 0.114291,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_6",
+            "value": 0.990506,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_7",
+            "value": 1,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_8",
+            "value": 0.49063,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_9",
+            "value": 0.328178,
+            "weight": 0.1,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_10",
+            "value": 0,
+            "weight": 0.1,
+            "multiplier": 1
+          }
+        ]
+      }
+    },
+    "savedSettings": {
+      "outerWeights": {
+        "hazard": 0.33,
+        "exposure": 0.33,
+        "vulnerability": 0.34
+      },
+      "hazardIndicators": [
+        {
+          "name": "Hazard 1",
+          "weight": 0.5,
+          "value": 0.499336,
+          "year": 2025
+        },
+        {
+          "name": "Hazard 2",
+          "weight": 0.5,
+          "value": 0.274324,
+          "year": 2025
+        }
+      ],
+      "exposureIndicators": [
+        {
+          "name": "Total_Population",
+          "weight": 0.1,
+          "value": 0,
+          "multiplier": 1
+        },
+        {
+          "name": "Age",
+          "weight": 0.1,
+          "value": 1,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_3",
+          "weight": 0.1,
+          "value": 0.627783,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_4",
+          "weight": 0.1,
+          "value": 0.056114,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_5",
+          "weight": 0.1,
+          "value": 1,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_6",
+          "weight": 0.1,
+          "value": 0.989391,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_7",
+          "weight": 0.1,
+          "value": 0.488181,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_8",
+          "weight": 0.1,
+          "value": 0.820203,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_9",
+          "weight": 0.1,
+          "value": 0.661728,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_10",
+          "weight": 0.1,
+          "value": 0.485656,
+          "multiplier": 1
+        }
+      ],
+      "vulnerabilityIndicators": [
+        {
+          "name": "Labour Force Participation Rate",
+          "weight": 0.1,
+          "value": 0.479411765,
+          "multiplier": 1
+        },
+        {
+          "name": "Unemployement_Rate",
+          "weight": 0.1,
+          "value": 0.247933884,
+          "multiplier": 1
+        },
+        {
+          "name": "Piped_Shared_Water",
+          "weight": 0.1,
+          "value": 0.392156863,
+          "multiplier": 1
+        },
+        {
+          "name": "Piped_Private_Water",
+          "weight": 0.1,
+          "value": 0,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_5",
+          "weight": 0.1,
+          "value": 0.114291,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_6",
+          "weight": 0.1,
+          "value": 0.990506,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_7",
+          "weight": 0.1,
+          "value": 1,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_8",
+          "weight": 0.1,
+          "value": 0.49063,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_9",
+          "weight": 0.1,
+          "value": 0.328178,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_10",
+          "weight": 0.1,
+          "value": 0,
+          "multiplier": 1
+        }
+      ]
+    }
+  },
+  {
+    "savedAt": "2026-06-23T08:46:19.803935",
+    "name": "P1",
+    "province": "Torba",
+    "startYear": 2032,
+    "endYear": 2047,
+    "tenure": 15,
+    "riskScore": 0.445234,
+    "level": "High",
+    "breakdown": {
+      "hazard": {
+        "outerWeight": 0.33,
+        "score": 0.42311,
+        "contribution": 0.139626,
+        "items": [
+          {
+            "name": "Hazard 1",
+            "value": 0.42311,
+            "weight": 1
+          },
+          {
+            "name": "Hazard 2",
+            "value": 0.223478,
+            "weight": 0
+          }
+        ]
+      },
+      "exposure": {
+        "outerWeight": 0.33,
+        "score": 0.501156,
+        "contribution": 0.165382,
+        "items": [
+          {
+            "name": "Total_Population",
+            "value": 0,
+            "weight": 0.17,
+            "multiplier": 0.6
+          },
+          {
+            "name": "Age",
+            "value": 1,
+            "weight": 0.17,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_3",
+            "value": 0.627783,
+            "weight": 0.17,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_4",
+            "value": 0.056114,
+            "weight": 0.17,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_5",
+            "value": 1,
+            "weight": 0.17,
+            "multiplier": 1
+          },
+          {
+            "name": "exposure_indicator_6",
+            "value": 0.299291,
+            "weight": 0.15,
+            "multiplier": 0.55
+          }
+        ]
+      },
+      "vulnerability": {
+        "outerWeight": 0.34,
+        "score": 0.412429,
+        "contribution": 0.140226,
+        "items": [
+          {
+            "name": "Unemployement_Rate",
+            "value": 0.022314,
+            "weight": 0.14,
+            "multiplier": 0.3
+          },
+          {
+            "name": "vulnerability_indicator_5",
+            "value": 0.114291,
+            "weight": 0.14,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_6",
+            "value": 0.990506,
+            "weight": 0.14,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_7",
+            "value": 1,
+            "weight": 0.14,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_8",
+            "value": 0.49063,
+            "weight": 0.14,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_9",
+            "value": 0.328178,
+            "weight": 0.14,
+            "multiplier": 1
+          },
+          {
+            "name": "vulnerability_indicator_10",
+            "value": 0,
+            "weight": 0.16,
+            "multiplier": 1
+          }
+        ]
+      }
+    },
+    "savedSettings": {
+      "outerWeights": {
+        "hazard": 0.33,
+        "exposure": 0.33,
+        "vulnerability": 0.34
+      },
+      "hazardIndicators": [
+        {
+          "name": "Hazard 1",
+          "weight": 0.5,
+          "value": 0.42311,
+          "year": 2025
+        },
+        {
+          "name": "Hazard 2",
+          "weight": 0.5,
+          "value": 0.223478,
+          "year": 2025
+        }
+      ],
+      "exposureIndicators": [
+        {
+          "name": "Total_Population",
+          "weight": 0.17,
+          "value": 0,
+          "multiplier": 0.6
+        },
+        {
+          "name": "Age",
+          "weight": 0.17,
+          "value": 1,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_3",
+          "weight": 0.17,
+          "value": 0.627783,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_4",
+          "weight": 0.17,
+          "value": 0.056114,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_5",
+          "weight": 0.17,
+          "value": 1,
+          "multiplier": 1
+        },
+        {
+          "name": "exposure_indicator_6",
+          "weight": 0.15,
+          "value": 0.54416505,
+          "multiplier": 0.55
+        }
+      ],
+      "vulnerabilityIndicators": [
+        {
+          "name": "Unemployement_Rate",
+          "weight": 0.14,
+          "value": 0.0743801652,
+          "multiplier": 0.3
+        },
+        {
+          "name": "vulnerability_indicator_5",
+          "weight": 0.14,
+          "value": 0.114291,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_6",
+          "weight": 0.14,
+          "value": 0.990506,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_7",
+          "weight": 0.14,
+          "value": 1,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_8",
+          "weight": 0.14,
+          "value": 0.49063,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_9",
+          "weight": 0.14,
+          "value": 0.328178,
+          "multiplier": 1
+        },
+        {
+          "name": "vulnerability_indicator_10",
+          "weight": 0.16,
+          "value": 0,
+          "multiplier": 1
+        }
+      ]
+    }
+  }
+]

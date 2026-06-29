@@ -1,38 +1,40 @@
 // Frontend Dashboard for Climate Risk Calculator
-import { useState, useEffect } from "react";
+// Updated: Exposure now includes Total_Population, Age, exposure_indicator_3–10 (10 indicators)
+//          Vulnerability now includes Labour Force Participation Rate, Unemployment, Piped Water x2, vulnerability_indicator_5–10 (10 indicators)
+//          Male/Female columns removed. All indicator names sourced dynamically from /api/current-risk.
+//          Adaptation tab: exposure & vulnerability now have growth multiplier sliders.
+//          Future Risk tab: exposure & vulnerability now also have growth multiplier sliders.
+import { useState, useEffect, useRef } from "react";
 
-const API = "/api";
+const API = "http://127.0.0.1:8000/api";
 
 // ── Professional colour palette ──────────────────────────────────────────────
-// Slate-based neutrals + three muted semantic colours (no bright orange/green/purple)
 const C = {
-  // page & surface
   pageBg:      "#F4F6F9",
   surface:     "#FFFFFF",
   surfaceAlt:  "#F8FAFC",
   border:      "#DDE3EC",
   borderLight: "#EDF0F5",
-  // text
   textPrimary:   "#1A2332",
   textSecondary: "#4A5568",
   textMuted:     "#8A96A8",
-  // nav / brand
   navy:        "#1E3A5F",
   navyLight:   "#2C4F7C",
-  // component colours — subdued, professional
   hazard:        { bg: "#FDF4EE", border: "#C8885A", text: "#7A4520", accent: "#9A5530", dot: "#C8885A", header: "#8B4513" },
   exposure:      { bg: "#EEF3FA", border: "#5C85C0", text: "#1E3F6E", accent: "#2E5FA0", dot: "#5C85C0", header: "#1E3F6E" },
   vulnerability: { bg: "#EEF7F2", border: "#4E9E6E", text: "#1E5535", accent: "#2E7A4E", dot: "#4E9E6E", header: "#1E5535" },
-  // risk levels — muted
   levelLow:      { color: "#1E5535", bg: "#D8EFE2" },
   levelModerate: { color: "#7A5C00", bg: "#F5E8C0" },
   levelHigh:     { color: "#8B2C2C", bg: "#F5D8D8" },
   levelVeryHigh: { color: "#4A2080", bg: "#E0D5F5" },
   levelExtreme:  { color: "#5C1A1A", bg: "#F5D0D0" },
-  // stage colours for summary journey
   stageCurrentBorder:  "#5C85C0",
   stageFutureBorder:   "#C8885A",
   stageProjectBorder:  "#4E9E6E",
+  recalcBg:     "#FFFBEB",
+  recalcBorder: "#D97706",
+  recalcText:   "#92400E",
+  recalcBtn:    "#D97706",
 };
 
 const COLORS = {
@@ -89,6 +91,106 @@ function initEqual(keys) {
   const w = {};
   keys.forEach((k, i) => { w[k] = i === keys.length - 1 ? parseFloat((1 - base * (keys.length - 1)).toFixed(2)) : base; });
   return w;
+}
+
+function buildSectionResult(items, outerWeight) {
+  const score = items.reduce((sum, item) => sum + (item.value || 0) * (item.weight || 0), 0);
+  return {
+    score: parseFloat(score.toFixed(6)),
+    outerWeight,
+    contribution: parseFloat((score * outerWeight).toFixed(6)),
+    items: items.map(item => ({ ...item })),
+  };
+}
+
+function buildCurrentRiskResult(outer, hazardCfg, expCfg, vulnCfg) {
+  const hazardItems = Object.entries(hazardCfg).map(([name, item]) => ({
+    name,
+    value: item.value,
+    weight: item.weight,
+    isCustom: item.isCustom || false,
+  }));
+  const exposureItems = Object.entries(expCfg)
+    .filter(([, item]) => item.enabled !== false)
+    .map(([name, item]) => ({
+      name,
+      value: item.value,
+      weight: item.weight,
+      isCustom: item.isCustom || false,
+    }));
+  const vulnerabilityItems = Object.entries(vulnCfg)
+    .filter(([, item]) => item.enabled !== false)
+    .map(([name, item]) => ({
+      name,
+      value: item.value,
+      weight: item.weight,
+      isCustom: item.isCustom || false,
+    }));
+
+  const hazard = buildSectionResult(hazardItems, outer.hazard);
+  const exposure = buildSectionResult(exposureItems, outer.exposure);
+  const vulnerability = buildSectionResult(vulnerabilityItems, outer.vulnerability);
+  const riskScore = parseFloat((hazard.contribution + exposure.contribution + vulnerability.contribution).toFixed(6));
+
+  return {
+    province: null,
+    riskScore,
+    level: levelFromScore(riskScore),
+    breakdown: { hazard, exposure, vulnerability },
+  };
+}
+
+function buildConfigFromItems(items) {
+  const normalized = {};
+  const baseWeights = initEqual(items.map(item => item.name));
+  items.forEach(item => {
+    let displayName = item.name;
+    if (displayName === "LFPR_Overall") {
+      displayName = "Labour Force Participation Rate";
+    }
+    normalized[displayName] = {
+      value: item.value ?? 0,
+      baseValue: item.value ?? 0,
+      weight: typeof item.weight === "number" ? item.weight : baseWeights[item.name],
+      multiplier: item.multiplier ?? 1,
+      isCustom: item.isCustom || false,
+      enabled: true,
+    };
+  });
+  return normalized;
+}
+
+function buildHazardConfigFromItems(items, withYears = false) {
+  const normalized = {};
+  const baseWeights = initEqual(items.map(item => item.name));
+  items.forEach(item => {
+    const isBuiltin = item.name === "Hazard 1" || item.name === "Hazard 2";
+    normalized[item.name] = {
+      enabled: true,
+      weight: typeof item.weight === "number" ? item.weight : baseWeights[item.name],
+      value: item.value ?? 0,
+      year: withYears && isBuiltin ? 2025 : null,
+      isCustom: item.isCustom || !isBuiltin,
+    };
+  });
+  return normalized;
+}
+
+// ── Sync adapt cfg from current cfg ──────────────────────────────────────────
+function syncAdaptCfgFromCurrent(currentCfg, prevAdaptCfg) {
+  const next = {};
+  Object.entries(currentCfg).forEach(([name, cur]) => {
+    if (cur.enabled === false) return;
+    const prev = prevAdaptCfg[name];
+    next[name] = {
+      enabled: true,
+      weight: cur.weight,
+      baseValue: cur.value ?? cur.baseValue ?? 0,
+      multiplier: prev?.multiplier ?? 1,
+      isCustom: cur.isCustom || false,
+    };
+  });
+  return next;
 }
 
 // ── Shared UI primitives ─────────────────────────────────────────────────────
@@ -186,35 +288,407 @@ function OuterWeightBar({ outer, setOuter }) {
   );
 }
 
-// ── Hazard section (Future tab) — shared year selector ───────────────────────
+// ── Recalculate Banner ────────────────────────────────────────────────────────
 
-function HazardSection({ hazardCfg, setHazardCfg }) {
-  const HAZARDS = ["TXX", "RX1Day"];
-  const YEAR_OPTS = Array.from({ length: 2099 - 2027 + 1 }, (_, i) => 2027 + i);
-  const [sharedYear, setSharedYear] = useState(hazardCfg.TXX?.year || 2027);
+function RecalculateBanner({ onRecalculate }) {
+  return (
+    <div style={{
+      marginBottom: 16,
+      padding: "13px 18px",
+      borderRadius: 12,
+      background: C.recalcBg,
+      border: `1.5px solid ${C.recalcBorder}`,
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 14,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 18, lineHeight: 1 }}>⚠️</span>
+        <div>
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: C.recalcText }}>
+            New indicator added — baseline not yet updated
+          </p>
+          <p style={{ margin: "2px 0 0", fontSize: 12, color: C.recalcText, opacity: 0.8 }}>
+            Click Recalculate to lock in the new score as the baseline for Future Risk and Adaptation tabs.
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={onRecalculate}
+        style={{
+          flexShrink: 0,
+          padding: "10px 20px",
+          borderRadius: 9,
+          border: "none",
+          background: C.recalcBtn,
+          color: "white",
+          fontSize: 13,
+          fontWeight: 700,
+          cursor: "pointer",
+          letterSpacing: "0.03em",
+          whiteSpace: "nowrap",
+          boxShadow: "0 2px 8px rgba(217,119,6,0.25)",
+        }}
+      >
+        ⟳ Recalculate Current Risk
+      </button>
+    </div>
+  );
+}
+
+// ── CurrentRiskIndicatorSection ───────────────────────────────────────────────
+
+function CurrentRiskIndicatorSection({ type, title, cfg, setCfg, onToggle }) {
+  const c = COLORS[type];
+
+  const allEntries   = Object.entries(cfg);
+  const enabledNames = allEntries.filter(([, v]) => v.enabled !== false).map(([k]) => k);
+  const enabledCount = enabledNames.length;
+
+  function toggle(name) {
+    onToggle?.();
+    setCfg(prev => {
+      const wasEnabled = prev[name]?.enabled !== false;
+      const draft = { ...prev };
+      draft[name] = { ...prev[name], enabled: !wasEnabled };
+
+      const nowEnabled = Object.keys(draft).filter(k => draft[k]?.enabled !== false);
+      if (nowEnabled.length > 0) {
+        const w = initEqual(nowEnabled);
+        nowEnabled.forEach(k => { draft[k] = { ...draft[k], weight: w[k] }; });
+      }
+      Object.keys(draft).forEach(k => {
+        if (draft[k]?.enabled === false) draft[k] = { ...draft[k], weight: 0 };
+      });
+      return draft;
+    });
+  }
+
+  function changeWeight(name, val) {
+    setCfg(prev => {
+      const enabled = Object.keys(prev).filter(k => prev[k]?.enabled !== false);
+      const cur = Object.fromEntries(enabled.map(k => [k, prev[k].weight]));
+      const balanced = autoBalance(cur, name, val);
+      const draft = { ...prev };
+      enabled.forEach(k => { draft[k] = { ...draft[k], weight: balanced[k] }; });
+      return draft;
+    });
+  }
+
+  return (
+    <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+      <div style={{ background: c.bg, padding: "9px 13px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>{title}</span>
+        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>{enabledCount} / {allEntries.length} selected → flows to Future & Adaptation</span>
+      </div>
+      <div style={{ padding: "12px 13px", background: C.surface }}>
+        {allEntries.map(([name, ind]) => {
+          const isEnabled = ind.enabled !== false;
+          return (
+            <div key={name} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid ${C.borderLight}`, opacity: isEnabled ? 1 : 0.4, transition: "opacity 0.2s" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: isEnabled ? 6 : 0 }}>
+                <div
+                  onClick={() => toggle(name)}
+                  style={{
+                    width: 18, height: 18, borderRadius: 4, flexShrink: 0, cursor: "pointer",
+                    border: `2px solid ${isEnabled ? c.accent : "#CBD5E1"}`,
+                    background: isEnabled ? c.accent : "#F8FAFC",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    transition: "all 0.15s", boxShadow: isEnabled ? `0 0 0 3px ${c.accent}22` : "none"
+                  }}
+                >
+                  {isEnabled && (
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5">
+                      <path d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </div>
+                <span style={{ fontSize: 13, fontWeight: isEnabled ? 700 : 400, color: isEnabled ? c.text : "#94A3B8", flex: 1, userSelect: "none" }}>
+                  {name}
+                </span>
+                <span style={{
+                  fontSize: 11, fontWeight: 700,
+                  color: isEnabled ? c.accent : "#94A3B8",
+                  background: isEnabled ? c.bg : "#F1F5F9",
+                  border: `1px solid ${isEnabled ? c.border : "#E2E8F0"}`,
+                  borderRadius: 6, padding: "2px 8px"
+                }}>
+                  {typeof ind.value === "number" ? ind.value.toFixed(3) : "—"}
+                </span>
+              </div>
+              {isEnabled && (
+                <div style={{ paddingLeft: 26 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Weight</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: c.accent }}>{ind.weight.toFixed(2)}</span>
+                  </div>
+                  <WSlider value={ind.weight} onChange={v => changeWeight(name, v)} color={c.accent} disabled={enabledCount < 2} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── CurrentRiskSummaryPanel ───────────────────────────────────────────────────
+
+function CurrentRiskSummaryPanel({ result, isDirty }) {
+  const level = result ? result.level : null;
+  const lstyle = level ? LEVEL_STYLE[level] : null;
+
+  return (
+    <div style={{ position: "sticky", top: 180 }}>
+      <h3 style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 12px" }}>Current Risk Summary</h3>
+
+      {isDirty && (
+        <div style={{ marginBottom: 10, padding: "8px 12px", borderRadius: 9, background: C.recalcBg, border: `1px solid ${C.recalcBorder}`, fontSize: 11, color: C.recalcText, fontWeight: 600 }}>
+          ⏳ Score preview — click Recalculate to confirm as baseline
+        </div>
+      )}
+
+      <div style={{ background: C.surface, borderRadius: 14, border: `1px solid ${isDirty ? C.recalcBorder : lstyle ? lstyle.bg : C.border}`, overflow: "hidden" }}>
+        <div style={{ padding: "28px 20px 20px", background: lstyle ? lstyle.bg : C.surfaceAlt, display: "flex", flexDirection: "column", alignItems: "center", minHeight: 150, transition: "background 0.4s" }}>
+          <div style={{ fontSize: 56, fontWeight: 800, lineHeight: 1, marginBottom: 8, color: lstyle ? lstyle.color : C.border, opacity: isDirty ? 0.7 : 1 }}>{result ? result.riskScore.toFixed(3) : "—"}</div>
+          {result && <div style={{ fontSize: 10, fontWeight: 600, color: lstyle ? lstyle.color : C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10, opacity: 0.7 }}>Risk Index (0–1){isDirty ? " · pending" : ""}</div>}
+          <div style={{ padding: "5px 18px", borderRadius: 99, background: lstyle ? lstyle.color : C.border, color: "white", fontWeight: 700, fontSize: 13, transition: "all 0.4s", opacity: isDirty ? 0.75 : 1 }}>{level || "Not calculated"}</div>
+          {result && (
+            <div style={{ width: "100%", maxWidth: 180, marginTop: 16 }}>
+              <div style={{ height: 5, borderRadius: 99, background: "#E2E8F0", overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${result.riskScore * 100}%`, background: `linear-gradient(90deg,${C.vulnerability.accent},${C.hazard.accent})`, borderRadius: 99, transition: "width 0.6s ease" }} />
+              </div>
+            </div>
+          )}
+        </div>
+        {result && (
+          <div style={{ borderTop: `1px solid ${C.borderLight}`, padding: "13px 16px", background: C.surfaceAlt }}>
+            <p style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 9px" }}>Component Contributions</p>
+            {[['hazard','Hazard'],['exposure','Exposure'],['vulnerability','Vulnerability']].map(([key, lbl]) => {
+              const cc = COLORS[key];
+              const comp = result.breakdown[key];
+              return (
+                <div key={key} style={{ marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <div style={{ width: 6, height: 6, borderRadius: 99, background: cc.dot }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: cc.text }}>{lbl}</span>
+                      <span style={{ fontSize: 10, color: C.textMuted }}>× {comp.outerWeight.toFixed(2)}</span>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: cc.accent }}>{comp.contribution.toFixed(4)}</span>
+                  </div>
+                  {comp.items.map((item, idx) => (
+                    <div key={idx} style={{ display: "flex", justifyContent: "space-between", paddingLeft: 11, marginBottom: 2 }}>
+                      <span style={{ fontSize: 11, color: C.textSecondary }}>{item.name}</span>
+                      <span style={{ fontSize: 11, color: C.textPrimary, fontWeight: 600 }}>{item.value.toFixed(3)} × {item.weight.toFixed(2)} = {(item.value * item.weight).toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, background: C.surface, border: `1px solid ${C.border}` }}>
+              <p style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 4px" }}>Formula</p>
+              <p style={{ fontSize: 11, color: C.textSecondary, margin: 0, lineHeight: 1.7, fontFamily: "monospace" }}>
+                Risk = (H×{result.breakdown.hazard?.outerWeight.toFixed(2)}) + (E×{result.breakdown.exposure?.outerWeight.toFixed(2)}) + (V×{result.breakdown.vulnerability?.outerWeight.toFixed(2)})<br />
+                &nbsp;&nbsp;&nbsp;&nbsp; = {result.breakdown.hazard?.contribution.toFixed(4)} + {result.breakdown.exposure?.contribution.toFixed(4)} + {result.breakdown.vulnerability?.contribution.toFixed(4)}<br />
+                &nbsp;&nbsp;&nbsp;&nbsp; = <b>{result.riskScore.toFixed(4)}</b>
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── CurrentRiskTab ────────────────────────────────────────────────────────────
+
+function CurrentRiskTab({
+  province, sector, currentData, error,
+  outer, setOuter,
+  hazardCfg, setHazardCfg,
+  expCfg, setExpCfg,
+  vulnCfg, setVulnCfg,
+  isDirty, setIsDirty,
+  onBaselineConfirmed,
+}) {
+  if (!currentData) return (
+    <div style={{ padding: "40px 20px", textAlign: "center" }}>
+      {error && <div style={{ margin: "0 auto 14px", maxWidth: 720, padding: "10px 13px", borderRadius: 9, background: "#FDF2F2", border: `1px solid #E8C0C0`, fontSize: 13, color: "#8B2C2C", fontWeight: 500, textAlign: "left" }}>⚠ {error}</div>}
+      <p style={{ fontSize: 14, fontWeight: 700, color: C.hazard.text }}>⚠ Load Current Risk first</p>
+    </div>
+  );
+
+  const result = buildCurrentRiskResult(outer, hazardCfg, expCfg, vulnCfg);
+
+  function handleRecalculate() {
+    setIsDirty(false);
+    onBaselineConfirmed(result.riskScore);
+  }
+
+  return (
+    <div>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 15px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Current Risk View — 2026</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary }}>Sector: {sector}</span>
+      </div>
+
+      {isDirty && <RecalculateBanner onRecalculate={handleRecalculate} />}
+
+      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1.15fr 0.85fr", alignItems: "start" }}>
+        <div>
+          <OuterWeightBar outer={outer} setOuter={setOuter} />
+          <h3 style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 12px" }}>Adjust Current Risk</h3>
+          <CurrentRiskIndicatorSection type="hazard"        title="Hazard"        cfg={hazardCfg} setCfg={setHazardCfg} onToggle={() => setIsDirty(true)} />
+          <CurrentRiskIndicatorSection type="exposure"      title="Exposure"      cfg={expCfg}    setCfg={setExpCfg}    onToggle={() => setIsDirty(true)} />
+          <CurrentRiskIndicatorSection type="vulnerability" title="Vulnerability" cfg={vulnCfg}   setCfg={setVulnCfg}   onToggle={() => setIsDirty(true)} />
+        </div>
+        <CurrentRiskSummaryPanel result={result} isDirty={isDirty} />
+      </div>
+    </div>
+  );
+}
+
+// ── HazardSection (Future tab) ────────────────────────────────────────────────
+
+function HazardSection({ hazardCfg, setHazardCfg, currentHazardCfg, disableWeights = false, readOnly = false }) {
+  const BUILTINS = ["Hazard 1", "Hazard 2"];
+  const [yearData, setYearData] = useState({});
+  const [allYears, setAllYears] = useState([]);
+  const [loading, setLoading]   = useState(true);
+
+  const enabledInCurrent = BUILTINS.filter(h => currentHazardCfg?.[h]?.enabled !== false);
+
+  function getBandForYear(year) {
+    const bandStart = 2026 + Math.floor((year - 2026) / 11) * 11;
+    const bandEnd = bandStart + 10;
+    return { bandStart, bandEnd, bandLabel: `${bandStart}–${bandEnd}` };
+  }
 
   useEffect(() => {
-    setHazardCfg(prev => ({
-      ...prev,
-      TXX:    { ...prev.TXX,    year: sharedYear },
-      RX1Day: { ...prev.RX1Day, year: sharedYear },
-    }));
-  }, [sharedYear]);
+    async function fetchHazardData() {
+      setLoading(true);
+      try {
+        const [r1, r2] = await Promise.all([
+          fetch(`${API}/future-risk/years?hazard=Hazard+1`),
+          fetch(`${API}/future-risk/years?hazard=Hazard+2`),
+        ]);
+        const d1 = await r1.json();
+        const d2 = await r2.json();
+        const years1 = d1.years || [];
+        const years2 = d2.years || [];
+        const yearValues = {};
+        for (const year of years1) {
+          try {
+            const res = await fetch(`${API}/future-risk/value?hazard=Hazard+1&year=${year}`);
+            const data = await res.json();
+            if (!yearValues[year]) yearValues[year] = {};
+            yearValues[year].h1Value = data.value || 0;
+          } catch {}
+        }
+        for (const year of years2) {
+          try {
+            const res = await fetch(`${API}/future-risk/value?hazard=Hazard+2&year=${year}`);
+            const data = await res.json();
+            if (!yearValues[year]) yearValues[year] = {};
+            yearValues[year].h2Value = data.value || 0;
+          } catch {}
+        }
+        const allYearSet = new Set([...years1, ...years2]);
+        const sortedYears = Array.from(allYearSet).filter(y => y >= 2026).sort((a, b) => a - b);
+        const bandMap = {};
+        const yearDataMap = {};
+        for (const year of sortedYears) {
+          const band = getBandForYear(year);
+          const key = `${band.bandStart}-${band.bandEnd}`;
+          if (!bandMap[key]) {
+            bandMap[key] = { bandStart: band.bandStart, bandEnd: band.bandEnd, years: [], h1Sum: 0, h2Sum: 0, h1Count: 0, h2Count: 0 };
+          }
+          bandMap[key].years.push(year);
+          if (yearValues[year]?.h1Value !== undefined) { bandMap[key].h1Sum += yearValues[year].h1Value; bandMap[key].h1Count++; }
+          if (yearValues[year]?.h2Value !== undefined) { bandMap[key].h2Sum += yearValues[year].h2Value; bandMap[key].h2Count++; }
+        }
+        for (const [, band] of Object.entries(bandMap)) {
+          const h1Avg = band.h1Count > 0 ? band.h1Sum / band.h1Count : 0;
+          const h2Avg = band.h2Count > 0 ? band.h2Sum / band.h2Count : 0;
+          for (const year of band.years) {
+            yearDataMap[year] = { h1Value: h1Avg, h2Value: h2Avg, bandStart: band.bandStart, bandEnd: band.bandEnd, bandLabel: `${band.bandStart}–${band.bandEnd}` };
+          }
+        }
+        setYearData(yearDataMap);
+        setAllYears(sortedYears);
+        const defaultYear = sortedYears[0] || 2026;
+        const existingYear = hazardCfg["Hazard 1"]?.year || hazardCfg["Hazard 2"]?.year || null;
+        const validYear = existingYear && yearDataMap[existingYear] ? existingYear : defaultYear;
+        if (validYear && yearDataMap[validYear]) {
+          const entry = yearDataMap[validYear];
+          setHazardCfg(prev => {
+            const next = { ...prev };
+            BUILTINS.forEach(h => {
+              if (next[h]) {
+                next[h] = { ...next[h], year: validYear, bandStart: entry.bandStart, bandEnd: entry.bandEnd, bandLabel: entry.bandLabel, value: h === "Hazard 1" ? entry.h1Value : entry.h2Value };
+              }
+            });
+            return next;
+          });
+        }
+      } catch (e) { console.error("Failed to fetch hazard data", e); }
+      setLoading(false);
+    }
+    fetchHazardData();
+  }, []);
 
-  function toggle(h) {
+  if (enabledInCurrent.length === 0) {
+    return (
+      <div style={{ border: `1px solid ${COLORS.hazard.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ background: COLORS.hazard.bg, padding: "9px 13px", borderBottom: `1px solid ${COLORS.hazard.border}` }}>
+          <span style={{ fontWeight: 700, fontSize: 11, color: COLORS.hazard.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>Hazard</span>
+        </div>
+        <div style={{ padding: "16px 13px", background: C.surface, textAlign: "center" }}>
+          <span style={{ fontSize: 12, color: C.textMuted }}>No hazards selected — go to <b>Current Risk</b> tab to select hazard indicators.</span>
+        </div>
+      </div>
+    );
+  }
+
+  function selectYear(year) {
+    const entry = yearData[year];
+    if (!entry) return;
     setHazardCfg(prev => {
-      const next = { ...prev, [h]: { ...prev[h], enabled: !prev[h].enabled } };
-      const enabled = HAZARDS.filter(k => next[k].enabled);
+      const next = { ...prev };
+      BUILTINS.forEach(h => {
+        if (next[h] && enabledInCurrent.includes(h)) {
+          next[h] = { ...next[h], year, bandStart: entry.bandStart, bandEnd: entry.bandEnd, bandLabel: entry.bandLabel, value: h === "Hazard 1" ? entry.h1Value : entry.h2Value, enabled: true };
+        }
+      });
+      return next;
+    });
+  }
+
+  const sharedYear = hazardCfg["Hazard 1"]?.year || hazardCfg["Hazard 2"]?.year || null;
+  const selectedEntry = sharedYear ? yearData[sharedYear] : null;
+
+  function toggleHazard(h) {
+    if (readOnly) return;
+    if (!enabledInCurrent.includes(h)) return;
+    setHazardCfg(prev => {
+      const next = { ...prev };
+      if (next[h]) next[h] = { ...next[h], enabled: !prev[h]?.enabled };
+      const enabled = BUILTINS.filter(k => next[k]?.enabled && enabledInCurrent.includes(k));
       const w = initEqual(enabled);
-      HAZARDS.forEach(k => { next[k] = { ...next[k], weight: enabled.includes(k) ? w[k] : 0 }; });
+      BUILTINS.forEach(k => { if (next[k]) next[k] = { ...next[k], weight: enabled.includes(k) ? w[k] : 0 }; });
       return next;
     });
   }
 
   function changeWeight(h, val) {
+    if (disableWeights || readOnly) return;
     setHazardCfg(prev => {
-      const enabled = HAZARDS.filter(k => prev[k].enabled);
-      const cur = {}; enabled.forEach(k => { cur[k] = prev[k].weight; });
+      const enabled = BUILTINS.filter(k => prev[k]?.enabled && enabledInCurrent.includes(k));
+      const cur = {};
+      enabled.forEach(k => { cur[k] = prev[k].weight; });
       const bal = autoBalance(cur, h, val);
       const next = { ...prev };
       enabled.forEach(k => { next[k] = { ...next[k], weight: bal[k] }; });
@@ -222,53 +696,90 @@ function HazardSection({ hazardCfg, setHazardCfg }) {
     });
   }
 
-  const enabledCount = HAZARDS.filter(h => hazardCfg[h]?.enabled).length;
+  const enabledCount = BUILTINS.filter(h => hazardCfg[h]?.enabled && enabledInCurrent.includes(h)).length;
   const c = COLORS.hazard;
+
   return (
     <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
       <div style={{ background: c.bg, padding: "9px 13px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>Hazard</span>
-        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>{enabledCount} selected</span>
+        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>
+          {enabledCount} selected · 10-year band averages
+          {enabledInCurrent.length < BUILTINS.length && ` (${enabledInCurrent.length} available from Current tab)`}
+          {readOnly && " · read-only"}
+        </span>
       </div>
       <div style={{ padding: "12px 13px", background: C.surface }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "9px 12px", borderRadius: 8, background: c.bg, border: `1px solid ${c.border}` }}>
-          <span style={{ fontSize: 12, color: c.text, fontWeight: 700, minWidth: 38 }}>Year</span>
-          <select value={sharedYear} onChange={e => setSharedYear(parseInt(e.target.value))}
-            style={{ fontSize: 13, fontWeight: 600, border: `1px solid ${c.border}`, borderRadius: 7, padding: "4px 10px", background: C.surface, color: c.text, cursor: "pointer", flex: 1 }}>
-            {YEAR_OPTS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-          <span style={{ fontSize: 11, color: c.text, opacity: 0.6 }}>applied to both</span>
-        </div>
-        {HAZARDS.map(h => {
-          const cfg = hazardCfg[h];
-          return (
-            <div key={h} style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: cfg.enabled ? 8 : 0 }}>
-                <div onClick={() => toggle(h)} style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, cursor: "pointer", border: `2px solid ${cfg.enabled ? c.accent : C.border}`, background: cfg.enabled ? c.accent : C.surface, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}>
-                  {cfg.enabled && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>}
-                </div>
-                <span style={{ fontSize: 13, fontWeight: cfg.enabled ? 700 : 400, color: cfg.enabled ? c.text : C.textSecondary }}>
-                  {h === "TXX" ? "TXX (Max Temperature)" : "RX1Day (Max 1-Day Precipitation)"}
-                </span>
+        {loading && <p style={{ fontSize: 12, color: C.textMuted, margin: "0 0 10px", textAlign: "center" }}>Loading hazard data…</p>}
+        {!loading && allYears.length > 0 && (
+          <div style={{ marginBottom: 14, padding: "10px 12px", borderRadius: 9, background: c.bg, border: `1px solid ${c.border}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: selectedEntry ? 8 : 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: c.header, minWidth: 32 }}>Year</span>
+              <select
+                value={sharedYear || ""}
+                onChange={e => selectYear(parseInt(e.target.value))}
+                style={{ flex: 1, fontSize: 13, fontWeight: 600, border: `1px solid ${c.border}`, borderRadius: 7, padding: "5px 10px", background: C.surface, color: c.text, cursor: "pointer" }}
+              >
+                {allYears.map(y => (<option key={y} value={y}>{y}</option>))}
+              </select>
+            </div>
+            {selectedEntry && (
+              <div style={{ fontSize: 11, color: c.text, background: C.surface, borderRadius: 7, padding: "5px 9px", border: `1px solid ${c.border}` }}>
+                Year <b>{sharedYear}</b> falls in the <b>{selectedEntry.bandLabel}</b> band →
+                using the 10-year average for that period for both hazards.
               </div>
-              {cfg.enabled && (
-                <div style={{ paddingLeft: 25 }}>
-                  <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Inner weight</span>
-                  <WSlider value={cfg.weight} onChange={v => changeWeight(h, v)} color={c.accent} disabled={enabledCount < 2} />
+            )}
+          </div>
+        )}
+        {BUILTINS.map(h => {
+          const cfg = hazardCfg[h] || { enabled: false, weight: 0, value: 0, year: null };
+          const isAvailable = enabledInCurrent.includes(h);
+          const isEnabled = cfg.enabled && isAvailable;
+          return (
+            <div key={h} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.borderLight}`, opacity: isAvailable ? (isEnabled ? 1 : 0.45) : 0.25, transition: "opacity 0.2s", pointerEvents: isAvailable ? "auto" : "none" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div onClick={() => isAvailable && toggleHazard(h)} style={{ width: 18, height: 18, borderRadius: 4, flexShrink: 0, cursor: readOnly ? "default" : (isAvailable ? "pointer" : "default"), border: `2px solid ${isEnabled ? c.accent : "#CBD5E1"}`, background: isEnabled ? c.accent : "#F8FAFC", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s", boxShadow: isEnabled ? `0 0 0 3px ${c.accent}22` : "none", opacity: readOnly ? 0.7 : 1 }}>
+                  {isEnabled && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>}
+                </div>
+                <span style={{ fontSize: 13, fontWeight: isEnabled ? 700 : 400, color: isEnabled ? c.text : isAvailable ? "#94A3B8" : "#CBD5E1", flex: 1, userSelect: "none" }}>
+                  {h === "Hazard 1" ? "Hazard 1 — Max Temperature (TXX)" : "Hazard 2 — Max 1-Day Precipitation (RX1Day)"}
+                  {!isAvailable && <span style={{ fontSize: 10, color: C.textMuted, marginLeft: 6 }}>(not selected in Current tab)</span>}
+                  {readOnly && isAvailable && <span style={{ fontSize: 10, color: C.textMuted, marginLeft: 6 }}>(read-only)</span>}
+                </span>
+                {isEnabled && typeof cfg.value === "number" && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: c.accent, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 6, padding: "2px 8px" }}>{cfg.value.toFixed(3)}</span>
+                )}
+              </div>
+              {isEnabled && (
+                <div style={{ paddingLeft: 26, marginTop: 8, display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>
+                    Current baseline (2015–2025 avg): <b style={{ color: c.accent }}>{(currentHazardCfg?.[h]?.value ?? 0).toFixed(3)}</b>
+                  </div>
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                      <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Weight</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: c.accent }}>{cfg.weight.toFixed(2)}</span>
+                    </div>
+                    <WSlider value={cfg.weight} onChange={v => changeWeight(h, v)} color={c.accent} disabled={enabledCount < 2 || disableWeights || readOnly} />
+                  </div>
                 </div>
               )}
             </div>
           );
         })}
-        {enabledCount === 0 && <p style={{ fontSize: 12, color: C.textMuted, margin: "4px 0 0", textAlign: "center" }}>Select at least one hazard indicator</p>}
+        {enabledCount === 0 && !loading && (
+          <p style={{ fontSize: 12, color: C.textMuted, margin: "4px 0 0", textAlign: "center" }}>
+            No hazards enabled. Enable them in the <b>Current Risk</b> tab first.
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
-// ── Indicator section (Future tab) ───────────────────────────────────────────
+// ── IndicatorSection (Future tab) ─────────────────────────────────────────────
 
-function IndicatorSection({ type, indicators, cfg, setCfg }) {
+function IndicatorSection({ type, indicators, cfg, setCfg, disableWeights = false }) {
   const c = COLORS[type];
   const label = type.charAt(0).toUpperCase() + type.slice(1);
   const enabledKeys = indicators.filter(i => cfg[i.name]?.enabled).map(i => i.name);
@@ -285,6 +796,7 @@ function IndicatorSection({ type, indicators, cfg, setCfg }) {
   }
 
   function changeWeight(name, val) {
+    if (disableWeights) return;
     setCfg(prev => {
       const cur = {}; enabledKeys.forEach(k => { cur[k] = prev[k].weight; });
       const bal = autoBalance(cur, name, val);
@@ -315,7 +827,7 @@ function IndicatorSection({ type, indicators, cfg, setCfg }) {
               {indCfg.enabled && (
                 <div style={{ paddingLeft: 25 }}>
                   <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Inner weight</span>
-                  <WSlider value={indCfg.weight} onChange={v => changeWeight(ind.name, v)} color={c.accent} disabled={enabledKeys.length < 2} />
+                  <WSlider value={indCfg.weight} onChange={v => changeWeight(ind.name, v)} color={c.accent} disabled={enabledKeys.length < 2 || disableWeights} />
                 </div>
               )}
             </div>
@@ -326,7 +838,7 @@ function IndicatorSection({ type, indicators, cfg, setCfg }) {
   );
 }
 
-// ── Result panel ─────────────────────────────────────────────────────────────
+// ── ResultPanel ───────────────────────────────────────────────────────────────
 
 function ResultPanel({ result, currentRiskIndex, calculating, error, onCalculate, btnLabel = "Calculate →", children }) {
   const level  = result ? levelFromScore(result.riskScore) : null;
@@ -375,7 +887,7 @@ function ResultPanel({ result, currentRiskIndex, calculating, error, onCalculate
                   </div>
                   {comp.items.map((item, idx) => (
                     <div key={idx} style={{ display: "flex", justifyContent: "space-between", paddingLeft: 11, marginBottom: 2 }}>
-                      <span style={{ fontSize: 11, color: C.textSecondary }}>{item.name}{item.year ? ` (${item.year})` : ""}{item.multiplier && item.multiplier !== 1 ? ` ×${item.multiplier}` : ""}</span>
+                      <span style={{ fontSize: 11, color: C.textSecondary }}>{item.name}{item.year ? ` (${item.year})` : ""}{item.multiplier && item.multiplier !== 1 ? ` ×${item.multiplier.toFixed(2)}` : ""}</span>
                       <span style={{ fontSize: 11, color: C.textPrimary, fontWeight: 600 }}>{item.value.toFixed(3)} × {item.weight.toFixed(2)} = {(item.value * item.weight).toFixed(4)}</span>
                     </div>
                   ))}
@@ -404,23 +916,148 @@ function ResultPanel({ result, currentRiskIndex, calculating, error, onCalculate
   );
 }
 
-// ── Future Risk Tab ───────────────────────────────────────────────────────────
+// ── FutureIndicatorSection ────────────────────────────────────────────────────
+// Replaces ReadOnlyIndicatorList — shows base values from Current tab with an
+// editable growth/reduction multiplier slider. Selection & weights are read-only.
 
-function FutureRiskTab({ province, currentRiskIndex, currentData, outer, setOuter, hazardCfg, setHazardCfg, expCfg, setExpCfg, vulnCfg, setVulnCfg, result, setResult }) {
+function FutureIndicatorSection({ type, indicators, cfg, setCfg }) {
+  const c = COLORS[type];
+  const label = type.charAt(0).toUpperCase() + type.slice(1);
+
+  function changeMult(name, val) {
+    setCfg(prev => ({ ...prev, [name]: { ...prev[name], multiplier: val } }));
+  }
+
+  if (!indicators.length) return (
+    <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+      <div style={{ background: c.bg, padding: "9px 13px" }}>
+        <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</span>
+      </div>
+      <div style={{ padding: "14px 13px", background: C.surface, textAlign: "center" }}>
+        <span style={{ fontSize: 12, color: C.textMuted }}>No indicators selected — go to <b>Current Risk</b> tab to select indicators.</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+      <div style={{ background: c.bg, padding: "9px 13px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</span>
+        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>{indicators.length} selected · adjust growth multiplier</span>
+      </div>
+      <div style={{ padding: "12px 13px", background: C.surface }}>
+
+        {/* Legend */}
+        <div style={{ marginBottom: 12, padding: "7px 10px", borderRadius: 8, background: c.bg, border: `1px solid ${c.border}`, fontSize: 11, color: c.text }}>
+          <span style={{ fontWeight: 600 }}>Multiplier guide: </span>
+          <span style={{ color: "#8B2C2C", fontWeight: 700 }}>below 1× = decrease </span>
+          <span style={{ color: C.textMuted }}>· </span>
+          <span style={{ fontWeight: 700, color: C.textMuted }}>1× = no change </span>
+          <span style={{ color: C.textMuted }}>· </span>
+          <span style={{ color: c.accent, fontWeight: 700 }}>above 1× = increase</span>
+        </div>
+
+        {indicators.map(ind => {
+          const mult = cfg[ind.name]?.multiplier ?? 1;
+          const effectiveValue = Math.min(1, Math.max(0, ind.value * mult));
+          const changed = Math.abs(mult - 1) > 0.001;
+
+          return (
+            <div key={ind.name} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.borderLight}` }}>
+
+              {/* Header row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                {/* Filled read-only checkbox */}
+                <div style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, border: `2px solid ${c.accent}`, background: c.accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: c.text, flex: 1 }}>{ind.name}</span>
+
+                {/* base → effective value */}
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>base</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.textSecondary, background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 7px" }}>{ind.value.toFixed(3)}</span>
+                  <span style={{ fontSize: 12, color: C.textMuted }}>→</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: changed ? (mult > 1 ? c.accent : "#8B2C2C") : C.textMuted, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 5, padding: "2px 7px" }}>{effectiveValue.toFixed(3)}</span>
+                </div>
+
+                {/* Weight badge (read-only) */}
+                <span style={{ fontSize: 11, color: C.textMuted, background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 7px" }}>
+                  w: {ind.weight.toFixed(2)}
+                </span>
+              </div>
+
+              {/* Multiplier slider */}
+              <div style={{ paddingLeft: 25 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Growth / Reduction multiplier</span>
+                  {changed && (
+                    <button
+                      onClick={() => changeMult(ind.name, 1)}
+                      style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, cursor: "pointer" }}
+                    >
+                      Reset 1×
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 3 }}>
+                  <span>← decrease (below 1×)</span>
+                  <span>increase (above 1×) →</span>
+                </div>
+                <MultSlider value={mult} onChange={v => changeMult(ind.name, v)} color={c.accent} allowDecrease={true} />
+
+                {/* Live contribution preview */}
+                <div style={{ marginTop: 5, fontSize: 11, color: C.textMuted }}>
+                  Contribution: <b style={{ color: c.accent }}>{effectiveValue.toFixed(3)}</b> × <b>{ind.weight.toFixed(2)}</b> = <b style={{ color: c.text }}>{(effectiveValue * ind.weight).toFixed(4)}</b>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        <p style={{ margin: "4px 0 0", fontSize: 11, color: C.textMuted, fontStyle: "italic" }}>
+          Selection and weights are fixed by the <b>Current Risk</b> tab. Only the growth multiplier is adjustable here.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── FutureRiskTab ─────────────────────────────────────────────────────────────
+
+function FutureRiskTab({
+  province, currentRiskIndex, currentData, currentOuter,
+  currentHazardCfg, currentExpCfg, currentVulnCfg,
+  hazardCfg, setHazardCfg,
+  expCfg, setExpCfg,
+  vulnCfg, setVulnCfg,
+  result, setResult,
+  isDirty,
+}) {
   const [calculating, setCalc]    = useState(false);
   const [calcError, setCalcError] = useState("");
 
-  const expIndicators  = currentData?.exposure?.items  || [];
-  const vulnIndicators = currentData?.vulnerability?.items || [];
+  // Base indicators from current tab (enabled only)
+  const expIndicators  = Object.entries(currentExpCfg  || {}).filter(([, cfg]) => cfg.enabled !== false).map(([name, cfg]) => ({ name, value: cfg.value ?? 0, weight: cfg.weight ?? 0 }));
+  const vulnIndicators = Object.entries(currentVulnCfg || {}).filter(([, cfg]) => cfg.enabled !== false).map(([name, cfg]) => ({ name, value: cfg.value ?? 0, weight: cfg.weight ?? 0 }));
+
+  // Apply growth multipliers from futureExpCfg / futureVulnCfg
+  function applyMultiplier(indicators, cfg) {
+    return indicators.map(i => ({
+      ...i,
+      value: Math.min(1, Math.max(0, i.value * (cfg[i.name]?.multiplier ?? 1))),
+      multiplier: cfg[i.name]?.multiplier ?? 1,
+    }));
+  }
 
   function validate() {
     const issues = [];
-    const eh = ["TXX","RX1Day"].filter(h => hazardCfg[h]?.enabled);
+    const eh = Object.keys(hazardCfg).filter(h => hazardCfg[h]?.enabled);
     if (!eh.length) issues.push("Select at least one hazard indicator");
-    const ot = outer.hazard + outer.exposure + outer.vulnerability;
+    const ot = currentOuter.hazard + currentOuter.exposure + currentOuter.vulnerability;
     if (Math.abs(ot - 1.0) > 0.02) issues.push(`Outer weights must sum to 1.00 (currently ${ot.toFixed(2)})`);
-    if (!expIndicators.filter(i => expCfg[i.name]?.enabled).length)  issues.push("Select at least one exposure indicator");
-    if (!vulnIndicators.filter(i => vulnCfg[i.name]?.enabled).length) issues.push("Select at least one vulnerability indicator");
+    if (!expIndicators.length)  issues.push("Select at least one exposure indicator in the Current Risk tab");
+    if (!vulnIndicators.length) issues.push("Select at least one vulnerability indicator in the Current Risk tab");
     return issues;
   }
 
@@ -429,11 +1066,23 @@ function FutureRiskTab({ province, currentRiskIndex, currentData, outer, setOute
     if (issues.length) { setCalcError(issues.join(" · ")); return; }
     setCalcError(""); setCalc(true);
     try {
+      const selectedHazards = Object.keys(hazardCfg).filter(h => hazardCfg[h]?.enabled);
+      const effectiveExp  = applyMultiplier(expIndicators,  expCfg);
+      const effectiveVuln = applyMultiplier(vulnIndicators, vulnCfg);
+
       const body = {
-        province, outerWeights: outer,
-        hazard: ["TXX","RX1Day"].filter(h => hazardCfg[h]?.enabled).map(h => ({ name: h, year: hazardCfg[h].year, weight: hazardCfg[h].weight })),
-        exposure: expIndicators.filter(i => expCfg[i.name]?.enabled).map(i => ({ name: i.name, value: expCfg[i.name].value, weight: expCfg[i.name].weight })),
-        vulnerability: vulnIndicators.filter(i => vulnCfg[i.name]?.enabled).map(i => ({ name: i.name, value: vulnCfg[i.name].value, weight: vulnCfg[i.name].weight })),
+        province,
+        useBaselineWeights: true,
+        outerWeights: { ...currentOuter },
+        hazard: selectedHazards.map(h => {
+          const cfg = hazardCfg[h];
+          if (h === "Hazard 1" || h === "Hazard 2") {
+            return { name: h, year: cfg.year, weight: currentHazardCfg[h]?.weight ?? cfg.weight };
+          }
+          return { name: h, value: currentHazardCfg[h]?.value ?? cfg.value ?? 0, weight: currentHazardCfg[h]?.weight ?? cfg.weight };
+        }),
+        exposure: effectiveExp.map(i => ({ name: i.name, value: i.value, weight: i.weight, multiplier: i.multiplier })),
+        vulnerability: effectiveVuln.map(i => ({ name: i.name, value: i.value, weight: i.weight, multiplier: i.multiplier })),
       };
       const res = await fetch(`${API}/future-risk`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Request failed"); }
@@ -451,7 +1100,14 @@ function FutureRiskTab({ province, currentRiskIndex, currentData, outer, setOute
   const issues = validate();
   return (
     <div>
-      <OuterWeightBar outer={outer} setOuter={setOuter} />
+      {isDirty && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 10, background: C.recalcBg, border: `1.5px solid ${C.recalcBorder}`, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 15 }}>⚠️</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: C.recalcText }}>
+            Current Risk baseline has pending changes. Go to the <b>Current Risk</b> tab and click <b>Recalculate</b> before running Future Risk.
+          </span>
+        </div>
+      )}
       {issues.length > 0 && (
         <div style={{ padding: "11px 14px", borderRadius: 10, background: "#FDF6EE", border: `1px solid ${C.hazard.border}`, marginBottom: 14 }}>
           <p style={{ fontSize: 12, fontWeight: 700, color: C.hazard.text, margin: "0 0 4px" }}>⚠ Fix before calculating</p>
@@ -461,9 +1117,21 @@ function FutureRiskTab({ province, currentRiskIndex, currentData, outer, setOute
       <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: 20, alignItems: "start" }}>
         <div>
           <h3 style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 12px" }}>Configure Indicators</h3>
-          <HazardSection hazardCfg={hazardCfg} setHazardCfg={setHazardCfg} />
-          <IndicatorSection type="exposure"      indicators={expIndicators}  cfg={expCfg}  setCfg={setExpCfg} />
-          <IndicatorSection type="vulnerability" indicators={vulnIndicators} cfg={vulnCfg} setCfg={setVulnCfg} />
+          <HazardSection hazardCfg={hazardCfg} setHazardCfg={setHazardCfg} currentHazardCfg={currentHazardCfg} disableWeights={true} readOnly={true} />
+          {/* Exposure with multipliers */}
+          <FutureIndicatorSection
+            type="exposure"
+            indicators={expIndicators}
+            cfg={expCfg}
+            setCfg={setExpCfg}
+          />
+          {/* Vulnerability with multipliers */}
+          <FutureIndicatorSection
+            type="vulnerability"
+            indicators={vulnIndicators}
+            cfg={vulnCfg}
+            setCfg={setVulnCfg}
+          />
         </div>
         <ResultPanel result={result} currentRiskIndex={currentRiskIndex} calculating={calculating} error={calcError} onCalculate={calculate} btnLabel="Calculate Future Risk →" />
       </div>
@@ -471,147 +1139,120 @@ function FutureRiskTab({ province, currentRiskIndex, currentData, outer, setOute
   );
 }
 
-// ── Adapt indicator section ───────────────────────────────────────────────────
+// ── AdaptIndicatorSection ─────────────────────────────────────────────────────
 
-function AdaptIndicatorSection({ type, cfg, setCfg, allowDecrease = false }) {
+function AdaptIndicatorSection({ type, cfg, setCfg, allowDecrease = true }) {
   const c = COLORS[type];
   const label = type.charAt(0).toUpperCase() + type.slice(1);
-  const allKeys = Object.keys(cfg);
-  const enabledKeys = allKeys.filter(k => cfg[k]?.enabled);
-  const [adding, setAdding] = useState(false);
-  const [newName, setNewName]   = useState("");
-  const [newValue, setNewValue] = useState("");
-
-  function toggle(name) {
-    setCfg(prev => {
-      const next = { ...prev, [name]: { ...prev[name], enabled: !prev[name]?.enabled } };
-      const nowEnabled = Object.keys(next).filter(k => next[k]?.enabled);
-      const w = initEqual(nowEnabled);
-      nowEnabled.forEach(k => { next[k] = { ...next[k], weight: w[k] }; });
-      Object.keys(next).filter(k => !next[k]?.enabled).forEach(k => { next[k] = { ...next[k], weight: 0 }; });
-      return next;
-    });
-  }
-
-  function changeWeight(name, val) {
-    setCfg(prev => {
-      const cur = {}; enabledKeys.forEach(k => { cur[k] = prev[k].weight; });
-      const bal = autoBalance(cur, name, val);
-      const next = { ...prev };
-      enabledKeys.forEach(k => { next[k] = { ...next[k], weight: bal[k] }; });
-      return next;
-    });
-  }
+  const enabledKeys = Object.keys(cfg).filter(k => cfg[k]?.enabled);
 
   function changeMult(name, val) {
     setCfg(prev => ({ ...prev, [name]: { ...prev[name], multiplier: val } }));
   }
 
-  function addCustom() {
-    const nm = newName.trim();
-    const vl = parseFloat(newValue);
-    if (!nm || isNaN(vl) || vl < 0 || vl > 1) return;
-    setCfg(prev => {
-      const next = { ...prev };
-      const currentKeys = [...Object.keys(next).filter(k => next[k]?.enabled), nm];
-      const w = initEqual(currentKeys);
-      currentKeys.forEach(k => { if (next[k]) next[k].weight = w[k]; });
-      next[nm] = { enabled: true, weight: w[nm], baseValue: vl, multiplier: 1, isCustom: true };
-      return next;
-    });
-    setNewName(""); setNewValue(""); setAdding(false);
-  }
-
-  function removeCustom(name) {
-    setCfg(prev => {
-      const next = { ...prev }; delete next[name];
-      const nowEnabled = Object.keys(next).filter(k => next[k]?.enabled);
-      const w = initEqual(nowEnabled);
-      nowEnabled.forEach(k => { next[k] = { ...next[k], weight: w[k] }; });
-      return next;
-    });
+  if (!enabledKeys.length) {
+    return (
+      <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ background: c.bg, padding: "9px 13px" }}>
+          <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</span>
+        </div>
+        <div style={{ padding: "14px 13px", background: C.surface, textAlign: "center" }}>
+          <span style={{ fontSize: 12, color: C.textMuted }}>No indicators selected — go to <b>Current Risk</b> tab to select indicators.</span>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
       <div style={{ background: c.bg, padding: "9px 13px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</span>
-        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>{enabledKeys.length} selected</span>
+        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>{enabledKeys.length} indicators · adjust growth multiplier</span>
       </div>
       <div style={{ padding: "12px 13px", background: C.surface }}>
-        {allKeys.map(name => {
+        {/* Legend */}
+        <div style={{ marginBottom: 12, padding: "7px 10px", borderRadius: 8, background: c.bg, border: `1px solid ${c.border}`, fontSize: 11, color: c.text }}>
+          <span style={{ fontWeight: 600 }}>Multiplier guide: </span>
+          <span style={{ color: "#8B2C2C", fontWeight: 700 }}>below 1× = decrease </span>
+          <span style={{ color: C.textMuted }}>· </span>
+          <span style={{ fontWeight: 700, color: C.textMuted }}>1× = no change </span>
+          <span style={{ color: C.textMuted }}>· </span>
+          <span style={{ color: c.accent, fontWeight: 700 }}>above 1× = increase</span>
+        </div>
+
+        {enabledKeys.map(name => {
           const ind = cfg[name];
           if (!ind) return null;
-          const effectiveValue = Math.min(1, Math.max(0, (ind.baseValue ?? 0) * (ind.multiplier ?? 1)));
+          const baseValue = ind.baseValue ?? 0;
+          const effectiveValue = Math.min(1, Math.max(0, baseValue * (ind.multiplier ?? 1)));
+          const mult = ind.multiplier ?? 1;
+          const changed = Math.abs(mult - 1) > 0.001;
+
           return (
-            <div key={name} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${C.borderLight}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: ind.enabled ? 9 : 0 }}>
-                <div onClick={() => toggle(name)} style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, cursor: "pointer", border: `2px solid ${ind.enabled ? c.accent : C.border}`, background: ind.enabled ? c.accent : C.surface, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}>
-                  {ind.enabled && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>}
+            <div key={name} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.borderLight}` }}>
+              {/* Indicator header row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                {/* Filled checkbox (read-only) */}
+                <div style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, border: `2px solid ${c.accent}`, background: c.accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>
                 </div>
-                <span style={{ fontSize: 13, fontWeight: ind.enabled ? 700 : 400, color: ind.enabled ? c.text : C.textSecondary, flex: 1 }}>{name}{ind.isCustom ? " ✦" : ""}</span>
-                {ind.enabled && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: c.accent, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 6, padding: "2px 7px" }}>
-                    {(ind.baseValue ?? 0).toFixed(3)} → {effectiveValue.toFixed(3)}
-                  </span>
-                )}
-                {ind.isCustom && (
-                  <button onClick={() => removeCustom(name)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 15, padding: "0 3px" }}>✕</button>
-                )}
+                <span style={{ fontSize: 13, fontWeight: 700, color: c.text, flex: 1 }}>{name}</span>
+                {/* Base → effective value */}
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>base</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.textSecondary, background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 7px" }}>{baseValue.toFixed(3)}</span>
+                  <span style={{ fontSize: 12, color: C.textMuted }}>→</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: changed ? (mult > 1 ? c.accent : "#8B2C2C") : C.textMuted, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 5, padding: "2px 7px" }}>{effectiveValue.toFixed(3)}</span>
+                </div>
+                {/* Weight badge (read-only) */}
+                <span style={{ fontSize: 11, color: C.textMuted, background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 7px" }}>
+                  w: {(ind.weight ?? 0).toFixed(2)}
+                </span>
               </div>
-              {ind.enabled && (
-                <div style={{ paddingLeft: 25, display: "grid", gap: 7 }}>
-                  <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-                      <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>{allowDecrease ? "Growth / Reduction multiplier" : "Growth multiplier"}</span>
-                      <span style={{ fontSize: 10, color: C.textMuted }}>base {(ind.baseValue ?? 0).toFixed(3)}</span>
-                    </div>
-                    {allowDecrease && (
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 2 }}>
-                        <span>← decrease (below 1×)</span><span>increase (above 1×) →</span>
-                      </div>
-                    )}
-                    <MultSlider value={ind.multiplier ?? 1} onChange={v => changeMult(name, v)} color={c.accent} allowDecrease={allowDecrease} />
-                  </div>
-                  <div>
-                    <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Inner weight</span>
-                    <WSlider value={ind.weight} onChange={v => changeWeight(name, v)} color={c.accent} disabled={enabledKeys.length < 2} />
-                  </div>
+
+              {/* Multiplier slider */}
+              <div style={{ paddingLeft: 25 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Growth / Reduction multiplier</span>
+                  {changed && (
+                    <button
+                      onClick={() => changeMult(name, 1)}
+                      style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, cursor: "pointer" }}
+                    >
+                      Reset 1×
+                    </button>
+                  )}
                 </div>
-              )}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 3 }}>
+                  <span>← decrease (below 1×)</span>
+                  <span>increase (above 1×) →</span>
+                </div>
+                <MultSlider value={mult} onChange={v => changeMult(name, v)} color={c.accent} allowDecrease={true} />
+                {/* Contribution preview */}
+                <div style={{ marginTop: 5, fontSize: 11, color: C.textMuted }}>
+                  Contribution: <b style={{ color: c.accent }}>{effectiveValue.toFixed(3)}</b> × <b>{(ind.weight ?? 0).toFixed(2)}</b> = <b style={{ color: c.text }}>{(effectiveValue * (ind.weight ?? 0)).toFixed(4)}</b>
+                </div>
+              </div>
             </div>
           );
         })}
-        {adding ? (
-          <div style={{ background: C.surfaceAlt, border: `1px dashed ${c.border}`, borderRadius: 9, padding: "11px" }}>
-            <p style={{ fontSize: 12, fontWeight: 700, color: c.text, margin: "0 0 8px" }}>New {label} Indicator</p>
-            <div style={{ display: "grid", gap: 7 }}>
-              <input placeholder="Indicator name" value={newName} onChange={e => setNewName(e.target.value)}
-                style={{ padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, fontSize: 13, outline: "none" }} />
-              <input placeholder="Normalised value (0–1)" type="number" min={0} max={1} step={0.001} value={newValue} onChange={e => setNewValue(e.target.value)}
-                style={{ padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, fontSize: 13, outline: "none" }} />
-              <div style={{ display: "flex", gap: 7 }}>
-                <button onClick={addCustom} style={{ flex: 1, padding: "8px", borderRadius: 7, border: "none", background: c.accent, color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Add</button>
-                <button onClick={() => { setAdding(false); setNewName(""); setNewValue(""); }} style={{ flex: 1, padding: "8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <button onClick={() => setAdding(true)} style={{ width: "100%", padding: "8px", borderRadius: 9, border: `1px dashed ${c.border}`, background: c.bg, color: c.text, fontSize: 12, fontWeight: 700, cursor: "pointer", marginTop: 2 }}>
-            + Add {label} Indicator
-          </button>
-        )}
+
+        <p style={{ margin: "4px 0 0", fontSize: 11, color: C.textMuted, fontStyle: "italic" }}>
+          Selection and weights are fixed by the <b>Current Risk</b> tab. Only the growth multiplier is adjustable here.
+        </p>
       </div>
     </div>
   );
 }
 
-// ── Adapt hazard section ──────────────────────────────────────────────────────
+// ── AdaptHazardSection ────────────────────────────────────────────────────────
 
-function AdaptHazardSection({ hazardCfg, setHazardCfg, startYear, tenure }) {
-  const HAZARDS = ["TXX", "RX1Day"];
-  const [yearOpts, setYearOpts] = useState({ TXX: [], RX1Day: [] });
-  const [loading, setLoading]   = useState({ TXX: false, RX1Day: false });
+function AdaptHazardSection({ hazardCfg, setHazardCfg, currentHazardCfg, startYear, tenure, readOnly = false }) {
+  const HAZARDS = ["Hazard 1", "Hazard 2"];
+  const [yearOpts, setYearOpts] = useState({ "Hazard 1": [], "Hazard 2": [] });
+  const [loading, setLoading]   = useState({ "Hazard 1": false, "Hazard 2": false });
+
+  const enabledInCurrent = HAZARDS.filter(h => currentHazardCfg?.[h]?.enabled !== false);
 
   useEffect(() => {
     HAZARDS.forEach(async h => {
@@ -625,12 +1266,14 @@ function AdaptHazardSection({ hazardCfg, setHazardCfg, startYear, tenure }) {
         setLoading(p => ({ ...p, [h]: false }));
       }
     });
-  }, [hazardCfg.TXX?.enabled, hazardCfg.RX1Day?.enabled]);
+  }, [hazardCfg["Hazard 1"]?.enabled, hazardCfg["Hazard 2"]?.enabled]);
 
   function toggle(h) {
+    if (readOnly) return;
+    if (!enabledInCurrent.includes(h)) return;
     setHazardCfg(prev => {
       const next = { ...prev, [h]: { ...prev[h], enabled: !prev[h].enabled } };
-      const enabled = HAZARDS.filter(k => next[k].enabled);
+      const enabled = HAZARDS.filter(k => next[k].enabled && enabledInCurrent.includes(k));
       const w = initEqual(enabled);
       HAZARDS.forEach(k => { next[k] = { ...next[k], weight: enabled.includes(k) ? w[k] : 0 }; });
       return next;
@@ -638,8 +1281,9 @@ function AdaptHazardSection({ hazardCfg, setHazardCfg, startYear, tenure }) {
   }
 
   function changeWeight(h, val) {
+    if (readOnly) return;
     setHazardCfg(prev => {
-      const enabled = HAZARDS.filter(k => prev[k].enabled);
+      const enabled = HAZARDS.filter(k => prev[k].enabled && enabledInCurrent.includes(k));
       const cur = {}; enabled.forEach(k => { cur[k] = prev[k].weight; });
       const bal = autoBalance(cur, h, val);
       const next = { ...prev };
@@ -648,15 +1292,31 @@ function AdaptHazardSection({ hazardCfg, setHazardCfg, startYear, tenure }) {
     });
   }
 
-  const enabledCount = HAZARDS.filter(h => hazardCfg[h]?.enabled).length;
+  const enabledCount = HAZARDS.filter(h => hazardCfg[h]?.enabled && enabledInCurrent.includes(h)).length;
   const endYear = startYear && tenure ? startYear + tenure : null;
   const c = COLORS.hazard;
+
+  if (enabledInCurrent.length === 0) {
+    return (
+      <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ background: c.bg, padding: "9px 13px", borderBottom: `1px solid ${c.border}` }}>
+          <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>Hazard</span>
+        </div>
+        <div style={{ padding: "16px 13px", background: C.surface, textAlign: "center" }}>
+          <span style={{ fontSize: 12, color: C.textMuted }}>No hazards selected — go to <b>Current Risk</b> tab to select hazard indicators.</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
       <div style={{ background: c.bg, padding: "9px 13px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontWeight: 700, fontSize: 11, color: c.header, textTransform: "uppercase", letterSpacing: "0.07em" }}>Hazard</span>
-        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>{startYear && endYear ? `Avg ${startYear}–${endYear}` : "Set project years above"}</span>
+        <span style={{ fontSize: 11, color: c.text, opacity: 0.7 }}>
+          {enabledCount} selected · {startYear && endYear ? `Avg ${startYear}–${endYear}` : "Set project years above"}
+          {enabledInCurrent.length < HAZARDS.length && ` (${enabledInCurrent.length} available from Current tab)`}
+        </span>
       </div>
       <div style={{ padding: "12px 13px", background: C.surface }}>
         {(!startYear || !tenure) && (
@@ -664,18 +1324,22 @@ function AdaptHazardSection({ hazardCfg, setHazardCfg, startYear, tenure }) {
         )}
         {HAZARDS.map(h => {
           const cfg = hazardCfg[h];
+          const isAvailable = enabledInCurrent.includes(h);
+          const isEnabled = cfg?.enabled && isAvailable;
           const validYears = yearOpts[h].filter(y => y >= startYear && y <= endYear);
           return (
-            <div key={h} style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: cfg.enabled ? 9 : 0 }}>
-                <div onClick={() => toggle(h)} style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, cursor: "pointer", border: `2px solid ${cfg.enabled ? c.accent : C.border}`, background: cfg.enabled ? c.accent : C.surface, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}>
-                  {cfg.enabled && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>}
+            <div key={h} style={{ marginBottom: 12, opacity: isAvailable ? (isEnabled ? 1 : 0.45) : 0.25, transition: "opacity 0.2s", pointerEvents: isAvailable ? "auto" : "none" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: isEnabled ? 9 : 0 }}>
+                <div onClick={isAvailable ? () => toggle(h) : undefined} style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, cursor: readOnly ? "default" : (isAvailable ? "pointer" : "default"), border: `2px solid ${isEnabled ? c.accent : C.border}`, background: isEnabled ? c.accent : C.surface, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s", opacity: readOnly ? 0.7 : 1 }}>
+                  {isEnabled && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M5 13l4 4L19 7" /></svg>}
                 </div>
-                <span style={{ fontSize: 13, fontWeight: cfg.enabled ? 700 : 400, color: cfg.enabled ? c.text : C.textSecondary }}>
-                  {h === "TXX" ? "TXX (Max Temperature)" : "RX1Day (Max 1-Day Precipitation)"}
+                <span style={{ fontSize: 13, fontWeight: isEnabled ? 700 : 400, color: isEnabled ? c.text : isAvailable ? C.textSecondary : "#CBD5E1" }}>
+                  {h === "Hazard 1" ? "Hazard 1 (Max Temperature)" : "Hazard 2 (Max 1-Day Precipitation)"}
+                  {!isAvailable && <span style={{ fontSize: 10, color: C.textMuted, marginLeft: 6 }}>(not selected in Current tab)</span>}
+                  {readOnly && isAvailable && <span style={{ fontSize: 10, color: C.textMuted, marginLeft: 6 }}>(read-only)</span>}
                 </span>
               </div>
-              {cfg.enabled && (
+              {isEnabled && (
                 <div style={{ paddingLeft: 25, display: "grid", gap: 7 }}>
                   {startYear && endYear && (
                     <div style={{ padding: "6px 10px", borderRadius: 7, background: c.bg, border: `1px solid ${c.border}`, fontSize: 12, color: c.text }}>
@@ -684,22 +1348,28 @@ function AdaptHazardSection({ hazardCfg, setHazardCfg, startYear, tenure }) {
                         : "⚠ No data in this year range"}
                     </div>
                   )}
-                  <div>
-                    <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Inner weight</span>
-                    <WSlider value={cfg.weight} onChange={v => changeWeight(h, v)} color={c.accent} disabled={enabledCount < 2} />
-                  </div>
+                  {!readOnly && (
+                    <div>
+                      <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Inner weight</span>
+                      <WSlider value={cfg.weight} onChange={v => changeWeight(h, v)} color={c.accent} disabled={enabledCount < 2} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
-        {enabledCount === 0 && <p style={{ fontSize: 12, color: C.textMuted, margin: "4px 0 0", textAlign: "center" }}>Select at least one hazard indicator</p>}
+        {enabledCount === 0 && (
+          <p style={{ fontSize: 12, color: C.textMuted, margin: "4px 0 0", textAlign: "center" }}>
+            No hazards enabled. Enable them in the <b>Current Risk</b> tab first.
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
-// ── Project card & compare ────────────────────────────────────────────────────
+// ── ProjectCard & ProjectCompare ──────────────────────────────────────────────
 
 function ProjectCard({ project, baselineRiskIndex }) {
   const level  = levelFromScore(project.riskScore);
@@ -733,7 +1403,7 @@ function ProjectCard({ project, baselineRiskIndex }) {
               <div style={{ fontSize: 10, color: C.textSecondary, borderTop: `1px solid ${cc.border}`, paddingTop: 4 }}>
                 {project.savedSettings[key === "hazard" ? "hazardIndicators" : key === "exposure" ? "exposureIndicators" : "vulnerabilityIndicators"].map((ind, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>• {ind.name}</span>
+                    <span>• {ind.name}{ind.multiplier && ind.multiplier !== 1 ? ` ×${ind.multiplier.toFixed(2)}` : ""}</span>
                     <span>W: {ind.weight.toFixed(2)} | V: {ind.value.toFixed(3)}</span>
                   </div>
                 ))}
@@ -775,9 +1445,20 @@ function ProjectCompare({ projects, currentRiskIndex, baselineLabel = "Current B
   );
 }
 
-// ── Adaptation Tab ────────────────────────────────────────────────────────────
+// ── AdaptationTab ─────────────────────────────────────────────────────────────
 
-function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentData, outer, setOuter, startYear, setStartYear, tenure, setTenure, hazardCfg, setHazardCfg, expCfg, setExpCfg, vulnCfg, setVulnCfg, result, setResult, projects, setProjects }) {
+function AdaptationTab({
+  province, futureRiskIndex, currentRiskIndex,
+  currentData, currentOuter,
+  currentHazardCfg, currentExpCfg, currentVulnCfg,
+  startYear, setStartYear, tenure, setTenure,
+  hazardCfg, setHazardCfg,
+  expCfg, setExpCfg,
+  vulnCfg, setVulnCfg,
+  result, setResult,
+  projects, setProjects,
+  isDirty,
+}) {
   const [projName,  setProjName]  = useState("");
   const [calculating, setCalc] = useState(false);
   const [calcError, setErr]   = useState("");
@@ -785,28 +1466,43 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
 
   const baselineRiskIndex = futureRiskIndex ?? currentRiskIndex;
 
+  useEffect(() => {
+    setExpCfg(prev => syncAdaptCfgFromCurrent(currentExpCfg, prev));
+  }, [JSON.stringify(
+    Object.entries(currentExpCfg || {})
+      .filter(([, v]) => v.enabled !== false)
+      .map(([k, v]) => ({ k, value: v.value, weight: v.weight }))
+  )]);
+
+  useEffect(() => {
+    setVulnCfg(prev => syncAdaptCfgFromCurrent(currentVulnCfg, prev));
+  }, [JSON.stringify(
+    Object.entries(currentVulnCfg || {})
+      .filter(([, v]) => v.enabled !== false)
+      .map(([k, v]) => ({ k, value: v.value, weight: v.weight }))
+  )]);
+
   function loadProjectConfig(p) {
-    setOuter({ ...p.savedSettings.outerWeights });
     setStartYear(String(p.startYear));
     setTenure(String(p.tenure));
-    const newHazardCfg = { TXX: { enabled: false, weight: 0.5 }, RX1Day: { enabled: false, weight: 0.5 } };
+    const newHazardCfg = { ...hazardCfg };
     p.savedSettings.hazardIndicators.forEach(ind => {
-      newHazardCfg[ind.name] = { enabled: true, weight: ind.weight };
+      newHazardCfg[ind.name] = { ...(newHazardCfg[ind.name] || { value: ind.value ?? 0, year: (ind.name === "Hazard 1" || ind.name === "Hazard 2") ? 2025 : null, isCustom: !(ind.name === "Hazard 1" || ind.name === "Hazard 2") }), enabled: true, weight: ind.weight };
     });
     setHazardCfg(newHazardCfg);
     setExpCfg(prev => {
       const next = { ...prev };
-      Object.keys(next).forEach(k => { next[k] = { ...next[k], enabled: false, weight: 0, multiplier: 1 }; });
+      Object.keys(next).forEach(k => { next[k] = { ...next[k], multiplier: 1 }; });
       p.savedSettings.exposureIndicators.forEach(ind => {
-        if (next[ind.name]) next[ind.name] = { ...next[ind.name], enabled: true, weight: ind.weight, multiplier: ind.multiplier ?? 1 };
+        if (next[ind.name]) next[ind.name] = { ...next[ind.name], multiplier: ind.multiplier ?? 1 };
       });
       return next;
     });
     setVulnCfg(prev => {
       const next = { ...prev };
-      Object.keys(next).forEach(k => { next[k] = { ...next[k], enabled: false, weight: 0, multiplier: 1 }; });
+      Object.keys(next).forEach(k => { next[k] = { ...next[k], multiplier: 1 }; });
       p.savedSettings.vulnerabilityIndicators.forEach(ind => {
-        if (next[ind.name]) next[ind.name] = { ...next[ind.name], enabled: true, weight: ind.weight, multiplier: ind.multiplier ?? 1 };
+        if (next[ind.name]) next[ind.name] = { ...next[ind.name], multiplier: ind.multiplier ?? 1 };
       });
       return next;
     });
@@ -823,14 +1519,14 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
     if (!sy || sy < 2026 || sy > 2099) issues.push("Enter a valid Start Year (2026–2099)");
     if (!tn || tn < 1 || tn > 50)     issues.push("Enter a valid Tenure (1–50 years)");
     if (endYear && endYear > 2099)     issues.push("Start Year + Tenure exceeds 2099");
-    const eh = ["TXX","RX1Day"].filter(h => hazardCfg[h]?.enabled);
+    const eh = Object.keys(hazardCfg).filter(h => hazardCfg[h]?.enabled);
     if (!eh.length) issues.push("Select at least one hazard indicator");
-    const ot = outer.hazard + outer.exposure + outer.vulnerability;
+    const ot = currentOuter.hazard + currentOuter.exposure + currentOuter.vulnerability;
     if (Math.abs(ot - 1.0) > 0.02) issues.push(`Outer weights must sum to 1.00 (currently ${ot.toFixed(2)})`);
-    const enabledExp  = Object.keys(expCfg).filter(k => expCfg[k]?.enabled);
-    const enabledVuln = Object.keys(vulnCfg).filter(k => vulnCfg[k]?.enabled);
-    if (!enabledExp.length)  issues.push("Select at least one exposure indicator");
-    if (!enabledVuln.length) issues.push("Select at least one vulnerability indicator");
+    const enabledExp  = Object.keys(expCfg  || {}).filter(k => expCfg[k]?.enabled);
+    const enabledVuln = Object.keys(vulnCfg || {}).filter(k => vulnCfg[k]?.enabled);
+    if (!enabledExp.length)  issues.push("Select at least one exposure indicator in the Current Risk tab");
+    if (!enabledVuln.length) issues.push("Select at least one vulnerability indicator in the Current Risk tab");
     return issues;
   }
 
@@ -839,15 +1535,36 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
     if (issues.length) { setErr(issues.join(" · ")); return; }
     setErr(""); setCalc(true);
     try {
-      const enabledH = ["TXX","RX1Day"].filter(h => hazardCfg[h]?.enabled);
-      const enabledExp  = Object.keys(expCfg).filter(k => expCfg[k]?.enabled);
-      const enabledVuln = Object.keys(vulnCfg).filter(k => vulnCfg[k]?.enabled);
+      const enabledH    = Object.keys(hazardCfg).filter(h => hazardCfg[h]?.enabled);
+      const enabledExp  = Object.keys(expCfg  || {}).filter(k => expCfg[k]?.enabled);
+      const enabledVuln = Object.keys(vulnCfg || {}).filter(k => vulnCfg[k]?.enabled);
+
       const body = {
-        province, outerWeights: outer, startYear: sy, endYear,
-        hazard: enabledH.map(h => ({ name: h, weight: hazardCfg[h].weight })),
-        exposure: enabledExp.map(k => ({ name: k, value: Math.min(1, (expCfg[k].baseValue ?? 0) * (expCfg[k].multiplier ?? 1)), weight: expCfg[k].weight, multiplier: expCfg[k].multiplier ?? 1 })),
-        vulnerability: enabledVuln.map(k => ({ name: k, value: Math.min(1, Math.max(0, (vulnCfg[k].baseValue ?? 0) * (vulnCfg[k].multiplier ?? 1))), weight: vulnCfg[k].weight, multiplier: vulnCfg[k].multiplier ?? 1 })),
+        province,
+        useBaselineWeights: true,
+        outerWeights: { ...currentOuter },
+        startYear: sy,
+        endYear,
+        hazard: enabledH.map(h => {
+          if (h === "Hazard 1" || h === "Hazard 2") {
+            return { name: h, year: hazardCfg[h].year, weight: currentHazardCfg[h]?.weight ?? hazardCfg[h].weight };
+          }
+          return { name: h, value: currentHazardCfg[h]?.value ?? hazardCfg[h].value ?? 0, weight: currentHazardCfg[h]?.weight ?? hazardCfg[h].weight };
+        }),
+        exposure: enabledExp.map(k => ({
+          name: k,
+          value: Math.min(1, Math.max(0, (expCfg[k]?.baseValue ?? 0) * (expCfg[k]?.multiplier ?? 1))),
+          weight: expCfg[k]?.weight ?? 0,
+          multiplier: expCfg[k]?.multiplier ?? 1,
+        })),
+        vulnerability: enabledVuln.map(k => ({
+          name: k,
+          value: Math.min(1, Math.max(0, (vulnCfg[k]?.baseValue ?? 0) * (vulnCfg[k]?.multiplier ?? 1))),
+          weight: vulnCfg[k]?.weight ?? 0,
+          multiplier: vulnCfg[k]?.multiplier ?? 1,
+        })),
       };
+
       const res = await fetch(`${API}/adaptation-risk`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Request failed"); }
       setResult(await res.json());
@@ -858,16 +1575,43 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
   async function saveProject() {
     if (!result) return;
     const name = projName.trim() || `Project ${projects.length + 1}`;
-    const hazardIndicators = Object.keys(hazardCfg).filter(k => hazardCfg[k]?.enabled).map(k => ({ name: k, weight: hazardCfg[k].weight, value: result.breakdown.hazard.items.find(i => i.name === k)?.value || 0 }));
-    const exposureIndicators = Object.keys(expCfg).filter(k => expCfg[k]?.enabled).map(k => ({ name: k, weight: expCfg[k].weight, value: Math.min(1, Math.max(0, (expCfg[k].baseValue ?? 0) * (expCfg[k].multiplier ?? 1))), multiplier: expCfg[k].multiplier }));
-    const vulnerabilityIndicators = Object.keys(vulnCfg).filter(k => vulnCfg[k]?.enabled).map(k => ({ name: k, weight: vulnCfg[k].weight, value: Math.min(1, Math.max(0, (vulnCfg[k].baseValue ?? 0) * (vulnCfg[k].multiplier ?? 1))), multiplier: vulnCfg[k].multiplier }));
-    const savedSettings = { outerWeights: { ...outer }, hazardIndicators, exposureIndicators, vulnerabilityIndicators };
-    const projectData = { ...result, name, province, startYear: sy, tenure: tn, endYear, savedSettings };
-    setProjects(prev => [...prev, projectData]);
+    const enabledExp  = Object.keys(expCfg  || {}).filter(k => expCfg[k]?.enabled);
+    const enabledVuln = Object.keys(vulnCfg || {}).filter(k => vulnCfg[k]?.enabled);
+    const hazardIndicators = Object.keys(hazardCfg).filter(k => hazardCfg[k]?.enabled).map(k => ({ name: k, weight: hazardCfg[k].weight, value: result.breakdown.hazard.items.find(i => i.name === k)?.value || 0, year: hazardCfg[k].year ?? null }));
+    const exposureIndicators = enabledExp.map(k => ({
+      name: k,
+      weight: expCfg[k].weight,
+      value: Math.min(1, Math.max(0, (expCfg[k].baseValue ?? 0) * (expCfg[k].multiplier ?? 1))),
+      multiplier: expCfg[k].multiplier ?? 1,
+    }));
+    const vulnerabilityIndicators = enabledVuln.map(k => ({
+      name: k,
+      weight: vulnCfg[k].weight,
+      value: Math.min(1, Math.max(0, (vulnCfg[k].baseValue ?? 0) * (vulnCfg[k].multiplier ?? 1))),
+      multiplier: vulnCfg[k].multiplier ?? 1,
+    }));
+    const savedSettings = { outerWeights: { ...currentOuter }, hazardIndicators, exposureIndicators, vulnerabilityIndicators };
     setProjName("");
     try {
-      await fetch(`${API}/save-project`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, province, startYear: sy, endYear, tenure: tn, riskScore: result.riskScore, level: result.level, outerWeights: outer, hazardIndicators, exposureIndicators, vulnerabilityIndicators, breakdown: result.breakdown }) });
+      const res = await fetch(`${API}/save-project`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, province, startYear: sy, endYear, tenure: tn, riskScore: result.riskScore, level: result.level, outerWeights: currentOuter, hazardIndicators, exposureIndicators, vulnerabilityIndicators, breakdown: result.breakdown }) });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Request failed"); }
+      const data = await res.json();
+      const projectData = { ...result, name, province, startYear: sy, tenure: tn, endYear, savedSettings, savedAt: data.savedAt || null };
+      setProjects(prev => [...prev, projectData]);
     } catch (e) { console.warn("Failed to save project to CSV:", e.message); }
+  }
+
+  async function deleteProject(project) {
+    if (!project) return;
+    try {
+      const res = await fetch(`${API}/projects`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedAt: project.savedAt || "", projectName: project.name, province: project.province, startYear: project.startYear, endYear: project.endYear, tenure: project.tenure }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Request failed"); }
+      setProjects(prev => prev.filter(p => !(p.name === project.name && p.province === project.province && p.startYear === project.startYear && p.endYear === project.endYear && p.tenure === project.tenure && (project.savedAt ? p.savedAt === project.savedAt : true))));
+    } catch (e) { console.warn("Failed to delete project:", e.message); }
   }
 
   if (!currentData) return (
@@ -880,6 +1624,15 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
 
   return (
     <div>
+      {isDirty && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: C.recalcBg, border: `1.5px solid ${C.recalcBorder}`, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 15 }}>⚠️</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: C.recalcText }}>
+            Current Risk baseline has pending changes. Go to the <b>Current Risk</b> tab and click <b>Recalculate</b> before running Adaptation Risk.
+          </span>
+        </div>
+      )}
+
       {/* Saved project loader */}
       {projects.length > 0 && (
         <div style={{ background: C.surface, border: `1px solid ${C.exposure.border}`, borderRadius: 12, padding: "13px 16px", marginBottom: 18 }}>
@@ -907,6 +1660,7 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
                       <LevelBadge level={lvl} />
                       <span style={{ fontSize: 13, fontWeight: 800, color: C.textPrimary }}>{p.riskScore.toFixed(3)}</span>
                       <button onClick={() => loadProjectConfig(p)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: C.navy, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Load</button>
+                      <button onClick={() => deleteProject(p)} style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.hazard.border}`, background: C.surface, color: C.hazard.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
                     </div>
                   </div>
                 );
@@ -939,7 +1693,9 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
         </div>
       </div>
 
-      <OuterWeightBar outer={outer} setOuter={setOuter} />
+      <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}` }}>
+        <span style={{ fontSize: 12, color: C.textMuted }}>Using baseline (Current Risk) weights for inner and outer components. Adjust growth multipliers below to model project scenarios.</span>
+      </div>
 
       {issues.length > 0 && (
         <div style={{ padding: "11px 14px", borderRadius: 10, background: "#FDF6EE", border: `1px solid ${C.hazard.border}`, marginBottom: 14 }}>
@@ -951,8 +1707,15 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
       <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: 20, alignItems: "start" }}>
         <div>
           <h3 style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 12px" }}>Configure Indicators</h3>
-          <AdaptHazardSection hazardCfg={hazardCfg} setHazardCfg={setHazardCfg} startYear={sy} tenure={tn} />
-          <AdaptIndicatorSection type="exposure"      cfg={expCfg}  setCfg={setExpCfg} />
+          <AdaptHazardSection
+            hazardCfg={hazardCfg}
+            setHazardCfg={setHazardCfg}
+            currentHazardCfg={currentHazardCfg}
+            startYear={sy}
+            tenure={tn}
+            readOnly={true}
+          />
+          <AdaptIndicatorSection type="exposure"      cfg={expCfg}  setCfg={setExpCfg}  allowDecrease={true} />
           <AdaptIndicatorSection type="vulnerability" cfg={vulnCfg} setCfg={setVulnCfg} allowDecrease={true} />
         </div>
         <ResultPanel result={result} currentRiskIndex={baselineRiskIndex} calculating={calculating} error={calcError} onCalculate={calculate} btnLabel="Calculate Project Risk →">
@@ -973,14 +1736,14 @@ function AdaptationTab({ province, futureRiskIndex, currentRiskIndex, currentDat
         <div style={{ marginTop: 28 }}>
           <h3 style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 14px" }}>Saved Projects ({projects.length})</h3>
           <ProjectCompare projects={projects} currentRiskIndex={baselineRiskIndex} baselineLabel={futureRiskIndex != null ? `Future Baseline (${futureRiskIndex.toFixed(3)})` : "Current Baseline"} />
-          {projects.map((p, i) => <ProjectCard key={i} project={p} baselineRiskIndex={baselineRiskIndex} />)}
+          {projects.map((p, i) => <div key={i} style={{ position: "relative" }}><ProjectCard project={p} baselineRiskIndex={baselineRiskIndex} /><button onClick={() => deleteProject(p)} style={{ position: "absolute", top: 12, right: 12, padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.hazard.border}`, background: C.surface, color: C.hazard.text, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Delete</button></div>)}
         </div>
       )}
     </div>
   );
 }
 
-// ── Summary Tab ───────────────────────────────────────────────────────────────
+// ── SummaryTab ────────────────────────────────────────────────────────────────
 
 function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex }) {
   const hasCurrentRisk = currentData != null;
@@ -988,15 +1751,13 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
   const hasProjects    = adaptProjects.length > 0;
   const futureScore    = futureResult?.riskScore ?? null;
   const futureLevel    = futureScore != null ? levelFromScore(futureScore) : null;
-
-  // ── inner helpers ──────────────────────────────────────────────────────────
+  const currentLevel   = currentRiskIndex != null ? levelFromScore(currentRiskIndex) : currentData?.level;
 
   function ScoreChip({ score, level }) {
     if (score == null) return <span style={{ fontSize: 11, color: C.textMuted }}>—</span>;
-    const ls = LEVEL_STYLE[level || levelFromScore(score)];
     return (
       <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-        <span style={{ fontSize: 22, fontWeight: 800, color: ls.color, lineHeight: 1 }}>{score.toFixed(3)}</span>
+        <span style={{ fontSize: 22, fontWeight: 800, color: "white", lineHeight: 1 }}>{score.toFixed(3)}</span>
         <LevelBadge level={level || levelFromScore(score)} />
       </div>
     );
@@ -1061,8 +1822,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
     );
   }
 
-  // ── Journey bar ────────────────────────────────────────────────────────────
-
   function JourneyCard({ label, sublabel, score, level, borderColor, active }) {
     const ls = level ? LEVEL_STYLE[level] : null;
     return (
@@ -1086,7 +1845,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
     );
   }
 
-  // ── Empty state ────────────────────────────────────────────────────────────
   if (!hasCurrentRisk) return (
     <div style={{ padding: "60px 20px", textAlign: "center" }}>
       <div style={{ fontSize: 36, marginBottom: 12, opacity: 0.3 }}>◈</div>
@@ -1095,15 +1853,13 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
     </div>
   );
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
-
-      {/* ── Journey bar ── */}
+      {/* Journey bar */}
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "18px 20px", marginBottom: 22 }}>
         <p style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 14px" }}>Risk Journey — {currentData.province}</p>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <JourneyCard label="Current Risk" sublabel="2026 baseline" score={currentRiskIndex} level={currentData.level} borderColor={C.stageCurrentBorder} active={true} />
+          <JourneyCard label="Current Risk" sublabel="2026 baseline" score={currentRiskIndex} level={currentLevel} borderColor={C.stageCurrentBorder} active={true} />
           <JourneyArrow delta={futureScore != null ? futureScore - currentRiskIndex : null} />
           <JourneyCard label="Future Risk" sublabel={futureResult ? `year ${futureResult.breakdown?.hazard?.items?.[0]?.year ?? "—"}` : "not calculated"} score={futureScore} level={futureLevel} borderColor={C.stageFutureBorder} active={hasFutureRisk} />
           {adaptProjects.map((p, i) => {
@@ -1118,10 +1874,10 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
         </div>
       </div>
 
-      {/* ── Risk Comparison Bar Chart ── */}
+      {/* Risk Comparison Bar Chart */}
       {(hasFutureRisk || hasProjects) && (() => {
         const stages = [
-          { label: "Current Risk", score: currentRiskIndex, level: currentData.level, color: C.stageCurrentBorder },
+          { label: "Current Risk", score: currentRiskIndex, level: currentLevel, color: C.stageCurrentBorder },
           ...(hasFutureRisk ? [{ label: "Future Risk", score: futureScore, level: futureLevel, color: C.stageFutureBorder }] : []),
           ...adaptProjects.map(p => ({ label: p.name, score: p.riskScore, level: levelFromScore(p.riskScore), sublabel: `${p.startYear}–${p.endYear}`, color: C.stageProjectBorder })),
         ];
@@ -1161,12 +1917,32 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
         );
       })()}
 
-      {/* ── Per-stage detail cards ── */}
+      {/* Adaptation projects comparison */}
+      {hasProjects && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 22 }}>
+          <div style={{ background: C.navy, padding: "12px 18px" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "white", textTransform: "uppercase", letterSpacing: "0.07em" }}>Adaptation Projects Comparison</span>
+            <span style={{ fontSize: 11, color: "#6A8AAA", marginLeft: 10 }}>{adaptProjects.length} project{adaptProjects.length > 1 ? "s" : ""} saved</span>
+          </div>
+          <div style={{ padding: "16px 18px" }}>
+            <ProjectCompare
+              projects={adaptProjects}
+              currentRiskIndex={futureScore ?? currentRiskIndex}
+              baselineLabel={hasFutureRisk ? `Future Baseline (${futureScore != null ? futureScore.toFixed(3) : ""})` : "Current Baseline"}
+            />
+            {adaptProjects.map((p, i) => (
+              <ProjectCard key={i} project={p} baselineRiskIndex={futureScore ?? currentRiskIndex} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Per-stage detail cards */}
       {(() => {
         const allStages = [
           {
             id: "current", label: "Current Risk", sublabel: `2026 · ${currentData.province}`,
-            score: currentRiskIndex, level: currentData.level, delta: null,
+            score: currentRiskIndex, level: currentLevel, delta: null,
             components: [["hazard","Hazard"],["exposure","Exposure"],["vulnerability","Vulnerability"]].map(([key, lbl]) => {
               const src = currentData[key];
               const items = src.items.map(i => ({ name: i.name, value: i.value, weight: i.weight }));
@@ -1200,7 +1976,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
           }),
         ];
 
-        // Responsive: if 1-2 stages → side-by-side; 3+ → single column each in grid
         const cols = allStages.length <= 2 ? allStages.length : Math.min(allStages.length, 3);
         return (
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 14, alignItems: "start", marginBottom: 24 }}>
@@ -1230,7 +2005,7 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
         );
       })()}
 
-      {/* ── Indicator performance table ── */}
+      {/* Indicator performance table */}
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 24 }}>
         <div style={{ background: C.navy, padding: "12px 18px" }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: "white", textTransform: "uppercase", letterSpacing: "0.07em" }}>Indicator Performance Across All Stages</span>
@@ -1250,7 +2025,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
             ])];
             if (!allNames.length) return null;
 
-            // Column definitions
             const cols = [
               { key: "current", label: "Current Risk", color: C.exposure },
               ...(hasFutureRisk ? [{ key: "future", label: "Future Risk", color: C.hazard }] : []),
@@ -1265,7 +2039,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
             }
 
             function getRef(colIdx, name) {
-              // Reference is previous column that has a value for this indicator
               for (let ci = colIdx - 1; ci >= 0; ci--) {
                 const cell = getCell(cols[ci].key, name);
                 if (cell) return cell.value;
@@ -1287,7 +2060,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
                       </tr>
                     </thead>
                     <tbody>
-                      {/* Component score row */}
                       <tr style={{ borderBottom: `1px solid ${C.border}`, background: C.surfaceAlt }}>
                         <td style={{ padding: "7px 12px", fontWeight: 700, color: C.textSecondary, fontSize: 11, fontStyle: "italic" }}>Component Score / Contribution</td>
                         {cols.map((col, ci) => {
@@ -1314,7 +2086,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
                           );
                         })}
                       </tr>
-                      {/* Indicator rows */}
                       {allNames.map((name, ri) => (
                         <tr key={name} style={{ borderBottom: `1px solid ${C.borderLight}`, background: ri % 2 === 0 ? C.surface : C.surfaceAlt }}>
                           <td style={{ padding: "8px 12px", fontWeight: 600, color: C.textPrimary }}>{name}</td>
@@ -1352,7 +2123,6 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
           })}
         </div>
       </div>
-
     </div>
   );
 }
@@ -1361,59 +2131,156 @@ function SummaryTab({ currentData, futureResult, adaptProjects, currentRiskIndex
 
 export default function App() {
   const [activeTab,   setActiveTab]   = useState("current");
-  const [sector,      setSector]      = useState("Health");
+  const [sector,      setSector]      = useState("Sector 1");
   const [province,    setProvince]    = useState("Torba");
   const [currentData, setCurrentData] = useState(null);
   const [error,       setError]       = useState("");
 
-  const [futureOuter, setFutureOuter] = useState({ hazard: 0.34, exposure: 0.33, vulnerability: 0.33 });
-  const [futureHazardCfg, setFutureHazardCfg] = useState({ TXX: { enabled: false, weight: 0.5, year: null }, RX1Day: { enabled: false, weight: 0.5, year: null } });
+  const [currentRiskDirty, setCurrentRiskDirty] = useState(false);
+  const [confirmedRiskScore, setConfirmedRiskScore] = useState(null);
+
+  const [currentOuter, setCurrentOuter] = useState({ hazard: 0.34, exposure: 0.33, vulnerability: 0.33 });
+  const [currentHazardCfg, setCurrentHazardCfg] = useState({});
+  const [currentExpCfg, setCurrentExpCfg] = useState({});
+  const [currentVulnCfg, setCurrentVulnCfg] = useState({});
+
+  // Future tab state — expCfg/vulnCfg now carry multipliers too
+  const [futureHazardCfg, setFutureHazardCfg] = useState({ "Hazard 1": { enabled: false, weight: 0.5, year: null }, "Hazard 2": { enabled: false, weight: 0.5, year: null } });
   const [futureExpCfg, setFutureExpCfg]   = useState({});
   const [futureVulnCfg, setFutureVulnCfg] = useState({});
   const [futureResult, setFutureResult]   = useState(null);
 
-  const [adaptOuter, setAdaptOuter] = useState({ hazard: 0.34, exposure: 0.33, vulnerability: 0.33 });
   const [adaptStartYear, setAdaptStartYear] = useState("");
   const [adaptTenure, setAdaptTenure]       = useState("");
-  const [adaptHazardCfg, setAdaptHazardCfg] = useState({ TXX: { enabled: false, weight: 0.5 }, RX1Day: { enabled: false, weight: 0.5 } });
+  const [adaptHazardCfg, setAdaptHazardCfg] = useState({ "Hazard 1": { enabled: false, weight: 0.5 }, "Hazard 2": { enabled: false, weight: 0.5 } });
   const [adaptExpCfg, setAdaptExpCfg]   = useState({});
   const [adaptVulnCfg, setAdaptVulnCfg] = useState({});
   const [adaptResult, setAdaptResult]   = useState(null);
   const [adaptProjects, setAdaptProjects] = useState([]);
 
-  useEffect(() => {
-    async function loadData() {
-      if (!province) return;
-      try {
-        setError("");
-        const res = await fetch(`${API}/current-risk?province=${encodeURIComponent(province)}`);
-        if (!res.ok) throw new Error("Request failed");
-        const data = await res.json();
-        setCurrentData(data);
-        const ei = data.exposure?.items || [];
-        const vi = data.vulnerability?.items || [];
-        const ew = initEqual(ei.map(i => i.name));
-        const fec = {}; const aec = {};
-        ei.forEach(i => {
-          fec[i.name] = { enabled: true, weight: ew[i.name], value: i.value };
-          aec[i.name] = { enabled: true, weight: ew[i.name], baseValue: i.value ?? 0, multiplier: 1, isCustom: false };
+  const currentRiskResult = currentData
+    ? buildCurrentRiskResult(currentOuter, currentHazardCfg, currentExpCfg, currentVulnCfg)
+    : null;
+
+  const currentRiskIndex = confirmedRiskScore ?? currentRiskResult?.riskScore ?? currentData?.riskIndex ?? null;
+
+  function handleBaselineConfirmed(newScore) {
+    setConfirmedRiskScore(newScore);
+    setCurrentRiskDirty(false);
+    setFutureResult(null);
+    setAdaptResult(null);
+  }
+
+  async function loadDataForCurrentProvince() {
+    if (!province) return;
+    try {
+      setError("");
+      setCurrentRiskDirty(false);
+      setConfirmedRiskScore(null);
+      const res = await fetch(`${API}/current-risk?province=${encodeURIComponent(province)}`);
+      if (!res.ok) throw new Error("Request failed");
+      const data = await res.json();
+
+      if (data.vulnerability && data.vulnerability.items) {
+        data.vulnerability.items = data.vulnerability.items.map(item => {
+          if (item.name === "LFPR_Overall") {
+            return { ...item, name: "Labour Force Participation Rate" };
+          }
+          return item;
         });
-        setFutureExpCfg(fec); setAdaptExpCfg(aec);
-        const vw = initEqual(vi.map(i => i.name));
-        const fvc = {}; const avc = {};
-        vi.forEach(i => {
-          fvc[i.name] = { enabled: true, weight: vw[i.name], value: i.value };
-          avc[i.name] = { enabled: true, weight: vw[i.name], baseValue: i.value ?? 0, multiplier: 1, isCustom: false };
-        });
-        setFutureVulnCfg(fvc); setAdaptVulnCfg(avc);
-        setFutureResult(null); setAdaptResult(null);
-      } catch {
-        setError("Failed to load risk data.");
-        setCurrentData(null);
       }
+
+      setCurrentData(data);
+      const currentHazard        = buildConfigFromItems(data.hazard?.items || []);
+      const currentExposure      = buildConfigFromItems(data.exposure?.items || []);
+      const currentVulnerability = buildConfigFromItems(data.vulnerability?.items || []);
+      setCurrentOuter({
+        hazard:        data.hazard?.overallWeight        ?? 0.34,
+        exposure:      data.exposure?.overallWeight      ?? 0.33,
+        vulnerability: data.vulnerability?.overallWeight ?? 0.33,
+      });
+      setCurrentHazardCfg(currentHazard);
+      setCurrentExpCfg(currentExposure);
+      setCurrentVulnCfg(currentVulnerability);
+
+      const hi = data.hazard?.items       || [];
+      const ei = data.exposure?.items     || [];
+      const vi = data.vulnerability?.items || [];
+
+      const fhc = buildHazardConfigFromItems(hi, true);
+      const ahc = buildHazardConfigFromItems(hi, true);
+      setFutureHazardCfg(fhc);
+      setAdaptHazardCfg(ahc);
+
+      const ew = initEqual(ei.map(i => i.name));
+      // futureExpCfg carries value + multiplier for growth sliders
+      const fec = {}, aec = {};
+      ei.forEach(i => {
+        fec[i.name] = { enabled: true, weight: ew[i.name], value: i.value, baseValue: i.value ?? 0, multiplier: 1, isCustom: i.isCustom || false };
+        aec[i.name] = { enabled: true, weight: ew[i.name], baseValue: i.value ?? 0, multiplier: 1, isCustom: i.isCustom || false };
+      });
+      setFutureExpCfg(fec);
+      setAdaptExpCfg(aec);
+
+      const vw = initEqual(vi.map(i => i.name));
+      const fvc = {}, avc = {};
+      vi.forEach(i => {
+        fvc[i.name] = { enabled: true, weight: vw[i.name], value: i.value, baseValue: i.value ?? 0, multiplier: 1, isCustom: i.isCustom || false };
+        avc[i.name] = { enabled: true, weight: vw[i.name], baseValue: i.value ?? 0, multiplier: 1, isCustom: i.isCustom || false };
+      });
+      setFutureVulnCfg(fvc);
+      setAdaptVulnCfg(avc);
+
+      setFutureResult(null);
+      setAdaptResult(null);
+    } catch {
+      setError("Failed to load risk data.");
+      setCurrentData(null);
+      setCurrentHazardCfg({});
+      setCurrentExpCfg({});
+      setCurrentVulnCfg({});
     }
-    loadData();
-  }, [province]);
+  }
+
+  function handleSectorChange(newSector) {
+    if (newSector === sector) return;
+    setSector(newSector);
+    setActiveTab("current");
+    setCurrentData(null);
+    setError("");
+    setCurrentRiskDirty(false);
+    setConfirmedRiskScore(null);
+    setCurrentOuter({ hazard: 0.34, exposure: 0.33, vulnerability: 0.33 });
+    setCurrentHazardCfg({});
+    setCurrentExpCfg({});
+    setCurrentVulnCfg({});
+    setFutureHazardCfg({ "Hazard 1": { enabled: false, weight: 0.5, year: null }, "Hazard 2": { enabled: false, weight: 0.5, year: null } });
+    setFutureExpCfg({});
+    setFutureVulnCfg({});
+    setFutureResult(null);
+    setAdaptStartYear("");
+    setAdaptTenure("");
+    setAdaptHazardCfg({ "Hazard 1": { enabled: false, weight: 0.5 }, "Hazard 2": { enabled: false, weight: 0.5 } });
+    setAdaptExpCfg({});
+    setAdaptVulnCfg({});
+    setAdaptResult(null);
+    setAdaptProjects([]);
+    setTimeout(() => { loadDataForCurrentProvince(); }, 100);
+  }
+
+  useEffect(() => { loadDataForCurrentProvince(); }, [province]);
+
+  useEffect(() => {
+    async function loadProjects() {
+      try {
+        const res = await fetch(`${API}/projects`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setAdaptProjects(Array.isArray(data.projects) ? data.projects : []);
+      } catch { setAdaptProjects([]); }
+    }
+    loadProjects();
+  }, []);
 
   const TABS = [
     { id: "current",    label: "Current Risk" },
@@ -1427,23 +2294,26 @@ export default function App() {
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
       {/* Header */}
-      <div style={{ background: C.navy, borderBottom: `1px solid ${C.navyLight}`, padding: "0 0 0 0", position: "sticky", top: 0, zIndex: 200 }}>
+      <div style={{ background: C.navy, borderBottom: `1px solid ${C.navyLight}`, position: "sticky", top: 0, zIndex: 200 }}>
         <div style={{ maxWidth: 1160, margin: "0 auto", padding: "18px 20px 0" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div>
               <h1 style={{ fontSize: "1.5rem", fontWeight: 800, color: "white", letterSpacing: "-0.02em", margin: 0 }}>Climate Risk Calculator</h1>
-              <p style={{ fontSize: 12, color: "#8AAFD0", margin: "3px 0 0", fontWeight: 400 }}>Vanuatu · Health Sector · Risk Assessment Platform</p>
+              <p style={{ fontSize: 12, color: "#8AAFD0", margin: "3px 0 0", fontWeight: 400 }}>Vanuatu · {sector} · Risk Assessment Platform</p>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, minWidth: 340 }}>
-              <Dropdown label="Sector"   options={["Health"]} selected={sector}   setSelected={setSector} />
+              <Dropdown label="Sector"   options={["Sector 1","Sector 2"]} selected={sector}   setSelected={handleSectorChange} />
               <Dropdown label="Province" options={["Torba","Sanma","Penama","Malampa","Shefa","Tafea"]} selected={province} setSelected={setProvince} />
             </div>
           </div>
-          {/* Tab bar */}
+
           <div style={{ display: "flex", gap: 0 }}>
             {TABS.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ padding: "10px 22px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, letterSpacing: "0.02em", background: "transparent", color: activeTab === tab.id ? "white" : "#6A8AAA", borderBottom: activeTab === tab.id ? "2px solid white" : "2px solid transparent", transition: "all 0.15s" }}>
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ padding: "10px 22px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, letterSpacing: "0.02em", background: "transparent", color: activeTab === tab.id ? "white" : "#6A8AAA", borderBottom: activeTab === tab.id ? "2px solid white" : "2px solid transparent", transition: "all 0.15s", position: "relative" }}>
                 {tab.label}
+                {tab.id === "current" && currentRiskDirty && (
+                  <span style={{ position: "absolute", top: 8, right: 8, width: 7, height: 7, borderRadius: 99, background: C.recalcBtn, border: "1.5px solid #92400E" }} />
+                )}
               </button>
             ))}
           </div>
@@ -1452,113 +2322,58 @@ export default function App() {
 
       <div style={{ maxWidth: 1160, margin: "22px auto 0", padding: "0 20px" }}>
 
-        {/* Current Risk */}
         {activeTab === "current" && (
-          <>
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 15px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Current Risk View — 2026</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary }}>Sector: {sector}</span>
-            </div>
-            {error && <div style={{ marginBottom: 14, padding: "10px 13px", borderRadius: 9, background: "#FDF2F2", border: `1px solid #E8C0C0`, fontSize: 13, color: "#8B2C2C", fontWeight: 500 }}>⚠ {error}</div>}
-            {currentData && (
-              <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1.2fr 0.8fr", alignItems: "start" }}>
-                <div style={{ display: "grid", gap: 14 }}>
-                  <SectionCard title="Hazard" color={COLORS.hazard}>
-                    <div style={{ marginBottom: 9, fontSize: 12, color: C.textSecondary }}>Overall Weight: <b>{currentData.hazard.overallWeight}</b></div>
-                    <div style={{ display: "grid", gap: 7 }}>
-                      {currentData.hazard.items.map(item => (
-                        <div key={item.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 11px", borderRadius: 8, background: COLORS.hazard.bg, fontSize: 13, border: `1px solid ${COLORS.hazard.border}` }}>
-                          <span style={{ color: COLORS.hazard.text, fontWeight: 600 }}>{item.name}</span>
-                          <span style={{ color: C.textSecondary }}><b style={{ color: COLORS.hazard.accent }}>{item.value}</b> · weight {item.weight}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </SectionCard>
-                  <SectionCard title="Exposure" color={COLORS.exposure}>
-                    <div style={{ marginBottom: 9, fontSize: 12, color: C.textSecondary }}>Overall Weight: <b>{currentData.exposure.overallWeight}</b></div>
-                    <div style={{ display: "grid", gap: 7 }}>
-                      {currentData.exposure.items.map(item => (
-                        <div key={item.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 11px", borderRadius: 8, background: COLORS.exposure.bg, fontSize: 13, border: `1px solid ${COLORS.exposure.border}` }}>
-                          <span style={{ color: COLORS.exposure.text, fontWeight: 600 }}>{item.name}</span>
-                          <span style={{ color: C.textSecondary }}><b style={{ color: COLORS.exposure.accent }}>{typeof item.value === "number" ? item.value.toFixed(3) : item.value}</b> · weight {item.weight}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </SectionCard>
-                  <SectionCard title="Vulnerability" color={COLORS.vulnerability}>
-                    <div style={{ marginBottom: 9, fontSize: 12, color: C.textSecondary }}>Overall Weight: <b>{currentData.vulnerability.overallWeight}</b></div>
-                    <div style={{ display: "grid", gap: 7 }}>
-                      {currentData.vulnerability.items.map(item => (
-                        <div key={item.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 11px", borderRadius: 8, background: COLORS.vulnerability.bg, fontSize: 13, border: `1px solid ${COLORS.vulnerability.border}` }}>
-                          <span style={{ color: COLORS.vulnerability.text, fontWeight: 600 }}>{item.name}</span>
-                          <span style={{ color: C.textSecondary }}><b style={{ color: COLORS.vulnerability.accent }}>{typeof item.value === "number" ? item.value.toFixed(3) : item.value}</b> · weight {item.weight}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </SectionCard>
-                </div>
-                <div style={{ position: "sticky", top: 100, alignSelf: "start" }}>
-                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, minHeight: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>Risk Index 2026</div>
-                    <div style={{ fontSize: 52, fontWeight: 800, color: C.textPrimary, lineHeight: 1, marginBottom: 12 }}>{currentData.riskIndex ?? "—"}</div>
-                    <LevelBadge level={currentData.level} />
-                    <div style={{ width: "100%", maxWidth: 160, marginTop: 16 }}>
-                      <div style={{ height: 5, borderRadius: 99, background: C.borderLight, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${(currentData.riskIndex || 0) * 100}%`, background: `linear-gradient(90deg,${C.vulnerability.accent},${C.hazard.accent})`, borderRadius: 99 }} />
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
-                        <span style={{ fontSize: 9, color: C.textMuted }}>0</span><span style={{ fontSize: 9, color: C.textMuted }}>1</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Future Risk */}
-        {activeTab === "future" && (
-          <FutureRiskTab
-            province={province}
-            currentRiskIndex={currentData?.riskIndex ?? null}
-            currentData={currentData}
-            outer={futureOuter} setOuter={setFutureOuter}
-            hazardCfg={futureHazardCfg} setHazardCfg={setFutureHazardCfg}
-            expCfg={futureExpCfg} setExpCfg={setFutureExpCfg}
-            vulnCfg={futureVulnCfg} setVulnCfg={setFutureVulnCfg}
-            result={futureResult} setResult={setFutureResult}
+          <CurrentRiskTab
+            province={province} sector={sector} currentData={currentData} error={error}
+            outer={currentOuter} setOuter={setCurrentOuter}
+            hazardCfg={currentHazardCfg} setHazardCfg={setCurrentHazardCfg}
+            expCfg={currentExpCfg}       setExpCfg={setCurrentExpCfg}
+            vulnCfg={currentVulnCfg}     setVulnCfg={setCurrentVulnCfg}
+            isDirty={currentRiskDirty}   setIsDirty={setCurrentRiskDirty}
+            onBaselineConfirmed={handleBaselineConfirmed}
           />
         )}
 
-        {/* Adaptation Projects */}
+        {activeTab === "future" && (
+          <FutureRiskTab
+            province={province} currentRiskIndex={currentRiskIndex} currentData={currentData}
+            currentOuter={currentOuter}
+            currentHazardCfg={currentHazardCfg} currentExpCfg={currentExpCfg} currentVulnCfg={currentVulnCfg}
+            hazardCfg={futureHazardCfg} setHazardCfg={setFutureHazardCfg}
+            expCfg={futureExpCfg}       setExpCfg={setFutureExpCfg}
+            vulnCfg={futureVulnCfg}     setVulnCfg={setFutureVulnCfg}
+            result={futureResult}       setResult={setFutureResult}
+            isDirty={currentRiskDirty}
+          />
+        )}
+
         {activeTab === "adaptation" && (
           <AdaptationTab
             province={province}
             futureRiskIndex={futureResult?.riskScore ?? null}
-            currentRiskIndex={currentData?.riskIndex ?? null}
+            currentRiskIndex={currentRiskIndex}
             currentData={currentData}
-            outer={adaptOuter} setOuter={setAdaptOuter}
+            currentOuter={currentOuter}
+            currentHazardCfg={currentHazardCfg} currentExpCfg={currentExpCfg} currentVulnCfg={currentVulnCfg}
             startYear={adaptStartYear} setStartYear={setAdaptStartYear}
-            tenure={adaptTenure} setTenure={setAdaptTenure}
+            tenure={adaptTenure}       setTenure={setAdaptTenure}
             hazardCfg={adaptHazardCfg} setHazardCfg={setAdaptHazardCfg}
-            expCfg={adaptExpCfg} setExpCfg={setAdaptExpCfg}
-            vulnCfg={adaptVulnCfg} setVulnCfg={setAdaptVulnCfg}
-            result={adaptResult} setResult={setAdaptResult}
-            projects={adaptProjects} setProjects={setAdaptProjects}
+            expCfg={adaptExpCfg}       setExpCfg={setAdaptExpCfg}
+            vulnCfg={adaptVulnCfg}     setVulnCfg={setAdaptVulnCfg}
+            result={adaptResult}       setResult={setAdaptResult}
+            projects={adaptProjects}   setProjects={setAdaptProjects}
+            isDirty={currentRiskDirty}
           />
         )}
 
-        {/* Summary */}
         {activeTab === "summary" && (
           <SummaryTab
             currentData={currentData}
-            currentRiskIndex={currentData?.riskIndex ?? null}
+            currentRiskIndex={currentRiskIndex}
             futureResult={futureResult}
             adaptProjects={adaptProjects}
           />
         )}
-
       </div>
     </div>
   );
