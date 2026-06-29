@@ -26,16 +26,49 @@ from pydantic import BaseModel
 BASE_DIR   = Path(__file__).parent
 CSV_PATH   = BASE_DIR / "Indicators_Data_Updated.csv"
 PROJ_PATH  = BASE_DIR / "projects.json"
+
 # ── FastAPI setup ─────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Climate Risk API")
 
+# ── CORS Configuration ──────────────────────────────────────────────────────
+# Allow specific origins for production, with wildcard for flexibility
+ALLOWED_ORIGINS = [
+    "https://climate-risk-gb7efj67t-uz1.vercel.app",  # Your Vercel frontend
+    "https://climate-risk-gb7efj67t-uz1.vercel.app/",  # With trailing slash
+    "https://climate-risk.vercel.app",  # If you have a custom domain
+    "http://localhost:3000",  # Local development
+    "http://localhost:5173",  # Vite default
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+
+# For production, we want to be specific, but during development use "*"
+# You can also read from environment variable: os.getenv("CORS_ORIGINS", "").split(",")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", None)
+if CORS_ORIGINS:
+    ALLOWED_ORIGINS = CORS_ORIGINS.split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS if os.getenv("ENVIRONMENT") == "production" else ["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Health Check Endpoint ────────────────────────────────────────────────────
+
+@app.get("/")
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Render and monitoring services."""
+    return {
+        "status": "healthy",
+        "service": "Climate Risk API",
+        "version": "1.0.0",
+        "environment": os.getenv("ENVIRONMENT", "development")
+    }
 
 # ── CSV column definitions ────────────────────────────────────────────────────
 
@@ -169,6 +202,10 @@ async def startup_event() -> None:
     global HAZARD1_DATA, HAZARD2_DATA
     HAZARD1_DATA = _load_hazard1()
     HAZARD2_DATA = _load_hazard2()
+    print(f"✅ Hazard data loaded: {len(HAZARD1_DATA)} years for Hazard 1, {len(HAZARD2_DATA)} years for Hazard 2")
+    print(f"📊 CSV file exists: {CSV_PATH.exists()}")
+    if CSV_PATH.exists():
+        print(f"📊 CSV size: {CSV_PATH.stat().st_size / 1024 / 1024:.2f} MB")
 
 
 def _hazard_years() -> list[int]:
@@ -547,4 +584,4 @@ def delete_project(body: DeleteProjectRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
