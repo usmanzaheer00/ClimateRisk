@@ -22,10 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-
 BASE_DIR   = Path(__file__).parent
-CSV_PATH   = BASE_DIR / "Indicators_Data_Updated.csv"
-PROJ_PATH  = BASE_DIR / "projects.json"
+DATA_DIR   = BASE_DIR / "data"
+
+CSV_PATH   = DATA_DIR / "Indicators_Data_Updated.csv"  # <-- Update this
+PROJ_PATH  = BASE_DIR / "projects.json"  # (Leave this here or move to DATA_DIR if preferred)
 
 # ── FastAPI setup ─────────────────────────────────────────────────────────────
 
@@ -159,8 +160,9 @@ def _save_projects(projects: list[dict]) -> None:
 # Hazard2.csv columns: time, highest_one_day_precipitation_amount_per_time_period, normallized_RX1Day
 # Both are global time-series (1980–2099), no province column.
 
-HAZ1_CSV = BASE_DIR / "Hazard1.csv"
-HAZ2_CSV = BASE_DIR / "Hazard2.csv"
+# ── Hazard data — Hazard1.csv (TXX) and Hazard2.csv (RX1Day) ────────────────
+HAZ1_CSV = DATA_DIR / "Hazard1.csv"  # <-- Update this
+HAZ2_CSV = DATA_DIR / "Hazard2.csv"  # <-- Update this
 
 # {year: normalized_value}
 HAZARD1_DATA: dict[int, float] = {}
@@ -581,7 +583,9 @@ def delete_project(body: DeleteProjectRequest):
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    import os
+    # Render provides the port dynamically via an environment variable
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
